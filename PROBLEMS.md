@@ -186,6 +186,42 @@ of assuming a `.gitignore` covers what it looks like it should cover.
 
 ---
 
+## 10. "Thinking" models broke the LangGraph supervisor's multi-turn flow
+
+**Problem:** The first two LLM candidates both failed once wired into the
+actual supervisor + sub-agent graph, not just in a single standalone call.
+DeepSeek's `deepseek-flash` threw `400: The reasoning_content in the
+thinking mode must be passed back to the API` the moment the supervisor
+handed off to a sub-agent (a second, multi-turn call within the same
+conversation). Switching to Groq-hosted `qwen/qwen3.6-27b` avoided that
+specific error, but it turned out to leak raw `<think>...</think>` blocks
+directly into the message `content` field on every response — even with the
+Qwen3 `/no_think` convention explicitly tried in the system prompt.
+
+**Root cause:** Both are "thinking"/reasoning models. DeepSeek's API
+contract requires the caller to echo `reasoning_content` back on every
+subsequent turn of a tool-using conversation — something LangChain's
+`ChatOpenAI` doesn't do automatically, and LangGraph's supervisor pattern is
+inherently multi-turn (handoff to a sub-agent is a second call in the same
+thread). Qwen3's thinking mode, at least as hosted by both Ollama and Groq
+in this test, didn't reliably respect the standard suppression conventions
+via the OpenAI-compatible endpoint.
+
+**Solution:** Switched to `openai/gpt-oss-20b` on Groq — same OpenAI-
+compatible `base_url`/`api_key` shape (no code change beyond the model
+string), but it returns clean `content` with no thinking-tag leakage and no
+reasoning-echo requirement. Verified directly against the actual failure
+scenario: a full `create_supervisor` + `create_agent` graph with a real tool
+call, multi-turn handoff to a sub-agent and back — works cleanly.
+
+**Why it mattered:** A model that works fine in a single `llm.invoke(...)`
+smoke test can still break the instant it's used inside the actual
+multi-turn agentic flow it's meant for — this was only caught by testing
+against the real supervisor graph, not just a standalone call, which is why
+that specific test was run before committing to a model choice.
+
+---
+
 ## Template for new entries
 
 ```
