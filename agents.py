@@ -206,6 +206,14 @@ class TransactionAgent(Agent):
             session.close()
 
 
+_ALLOWED_STATUS_TRANSITIONS = {
+    "pending": {"approved", "rejected"},
+    "approved": {"completed"},
+    "rejected": set(),   # terminal
+    "completed": set(),  # terminal
+}
+
+
 class ServiceAgent(Agent):
     agent_type = AgentType.SERVICE
 
@@ -235,9 +243,32 @@ class ServiceAgent(Agent):
                         error="not_found",
                     )
             elif op == "update":
+                requested_status = payload.get("status")
+
+                if requested_status is not None:
+                    current = crud_service.get_service_request(session, payload["id"])
+                    if current is None:
+                        return AgentResponse(
+                            agent=self.agent_type, success=False, message="Service request not found",
+                            error="not_found",
+                        )
+                    if requested_status not in _ALLOWED_STATUS_TRANSITIONS:
+                        return AgentResponse(
+                            agent=self.agent_type, success=False,
+                            message=f"'{requested_status}' is not a valid status",
+                            error="validation_error",
+                        )
+                    allowed_next = _ALLOWED_STATUS_TRANSITIONS[current.status]
+                    if requested_status not in allowed_next:
+                        return AgentResponse(
+                            agent=self.agent_type, success=False,
+                            message=f"Cannot transition from '{current.status}' to '{requested_status}'",
+                            error="invalid_status_transition",
+                        )
+
                 req = crud_service.update_service_request(
                     session, payload["id"],
-                    status=payload.get("status"), details=payload.get("details"),
+                    status=requested_status, details=payload.get("details"),
                 )
                 if req is None:
                     return AgentResponse(
