@@ -163,6 +163,29 @@ real transactions.
 
 ---
 
+## 9. `.env` existed but wasn't in `.gitignore`
+
+**Problem:** While wiring up the DeepSeek API key, an empty `.env` file was
+found already present at the project root, but `.gitignore` had no entry
+excluding it — meaning the very first `git add` after a real secret was
+written to that file would have staged it for commit.
+
+**Root cause:** `.env.example` was created early (Phase 0 scaffolding) as a
+template, but the actual `.env` and its `.gitignore` exclusion were never
+added at the same time — the file existed in a state where it looked safe
+(empty, matched the `.example` convention) but had no actual protection.
+
+**Solution:** Added `.env` to `.gitignore` and verified via
+`git check-ignore -v .env` that it was actually excluded, before the API key
+was ever staged — confirmed with `git status --ignored` that `.env` appeared
+under ignored files, not tracked ones, at the moment the key was added.
+
+**Why it mattered:** This is the exact failure mode that leaks API keys into
+public git history — caught by checking the actual git-tracked state instead
+of assuming a `.gitignore` covers what it looks like it should cover.
+
+---
+
 ## Template for new entries
 
 ```
