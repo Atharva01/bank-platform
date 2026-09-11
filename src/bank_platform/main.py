@@ -1,3 +1,7 @@
+import asyncio
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -10,9 +14,41 @@ from bank_platform.exceptions import (
     NotFoundError,
     ValidationError,
 )
-from bank_platform.graph import run
+from bank_platform.graph import SESSION_IDLE_TIMEOUT, run, sweep_expired_sessions
 
-app = FastAPI()
+logger = logging.getLogger(__name__)
+
+# Runs sweep_expired_sessions() on a timer so an abandoned session (one
+# that's never messaged again) still gets cleaned up, not just sessions
+# still receiving traffic (graph.py's per-request _expire_if_idle only
+# catches those). No scheduler dependency needed - a background asyncio
+# task under FastAPI's lifespan is enough for one lightweight periodic job.
+# Interval matches the idle timeout itself: no point sweeping more often
+# than sessions can actually go stale.
+_SWEEP_INTERVAL = SESSION_IDLE_TIMEOUT.total_seconds()
+
+
+async def _sweep_loop() -> None:
+    while True:
+        await asyncio.sleep(_SWEEP_INTERVAL)
+        try:
+            cleaned = sweep_expired_sessions()
+            if cleaned:
+                logger.info("session sweep: cleaned up %d expired session(s)", cleaned)
+        except Exception:
+            logger.exception("session sweep failed")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_sweep_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Dev-permissive for now — no frontend origin decided yet. Tighten
 # allow_origins to specific hosts before any real deployment.

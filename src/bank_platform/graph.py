@@ -116,22 +116,44 @@ supervisor = create_supervisor(
 ).compile(checkpointer=_checkpointer)
 
 
+def _expire_session(session_id: str) -> None:
+    """Cleans up everything tied to one session's lifecycle together - the
+    checkpoint thread, the idempotency dedup dict, and the sessions row -
+    so the three never drift out of sync. Shared by both the per-request
+    lazy check (_expire_if_idle) and the periodic sweep (sweep_expired_sessions).
+    """
+    _checkpointer.delete_thread(session_id)
+    _completed_calls.pop(session_id, None)
+    session_store.delete(session_id)
+
+
 def _expire_if_idle(session_id: str) -> None:
-    """Lazy, per-session expiry - no scheduler exists in this project, so
-    this runs once per /chat request instead of a background sweep. Only
-    touches the session actually being used, so cost is proportional to
-    real traffic. An abandoned session that's never messaged again still
-    lingers in Postgres (checkpointer tables + sessions table) - accepted
-    as normal DB housekeeping, not the original RAM-leak bug; a real
-    periodic sweep is a reasonable later addition, not needed now.
+    """Lazy, per-session expiry - runs once per /chat request, so it only
+    ever catches a session actually still in use. A session that's
+    abandoned outright (never messaged again) wouldn't be caught by this
+    alone - sweep_expired_sessions() (run periodically, see main.py) covers
+    that case.
     """
     last_activity = session_store.get_last_activity(session_id)
     if last_activity is None:
         return  # new session, nothing to expire
     if datetime.now(timezone.utc) - last_activity > SESSION_IDLE_TIMEOUT:
-        _checkpointer.delete_thread(session_id)
-        _completed_calls.pop(session_id, None)
-        session_store.delete(session_id)
+        _expire_session(session_id)
+
+
+def sweep_expired_sessions() -> int:
+    """Proactively cleans up every session that's gone idle past the
+    timeout, not just the one in the current request - closes the residual
+    gap _expire_if_idle leaves (an abandoned session that's never messaged
+    again previously lingered in Postgres indefinitely). Cheap: one query
+    plus per-session cleanup, run on a timer (main.py's lifespan task), no
+    new dependency needed. Returns the number of sessions cleaned up.
+    """
+    cutoff = datetime.now(timezone.utc) - SESSION_IDLE_TIMEOUT
+    expired_ids = session_store.list_expired_session_ids(cutoff)
+    for session_id in expired_ids:
+        _expire_session(session_id)
+    return len(expired_ids)
 
 
 def _extract_reply(messages) -> str:

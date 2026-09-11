@@ -449,6 +449,64 @@ question about the persistence layer either.
 
 ---
 
+## 16. Account deletion left orphaned rows; no access control on it
+
+**Problem:** `delete_account` removed only the `Account` row — any
+`Transaction`/`ServiceRequest` rows referencing that `account_id` were left
+behind, orphaned. Separately, the REST `DELETE /accounts/{id}` endpoint
+(kept deliberately reachable for a future admin caller, see #entry in
+PROGRESS.md) had no access control at all — any caller could hit it.
+
+**Root cause:** `crud_accounts.delete_account` only ever touched the
+`accounts` table; nothing cascaded. And no IAM layer exists yet (Phase 6,
+not started), so "isolated from agents" (done earlier) still left the raw
+endpoint open to any caller, not just staff.
+
+**Solution:** `crud_accounts.delete_account` now deletes matching
+`Transaction`/`ServiceRequest` rows in the same DB transaction before
+deleting the account. The REST endpoint is gated by a new
+`admin_auth.require_admin` FastAPI dependency — a static shared-secret
+header (`X-Admin-Key` against `ADMIN_API_KEY` in `.env`) — explicitly
+documented as an interim stand-in for real IAM, not a permanent pattern to
+extend to other endpoints.
+
+**Why it mattered:** orphaned rows are silent data corruption (a
+transaction/service request pointing at a nonexistent account); no access
+control on an irreversible delete is a real risk even in a small
+single-process app. Both are cheap to fix now and expensive to fix once
+there's real data depending on the old (wrong) behavior.
+
+## 17. DeepSeek's third rejection: silent hallucinated task completion
+
+**Problem:** Re-tested `deepseek-v4-flash` as a Groq alternative a third
+time, this time with `extra_body={"thinking": {"type": "disabled"}}` set
+(missing on both prior attempts, #10 and #14). This did eliminate the
+`reasoning_content` crash on multi-turn calls. But a real multi-turn
+supervisor run (open an account, then ask its balance) returned confident,
+well-formed "done" replies on *both* turns — and the database had zero
+rows for the account that was supposedly created.
+
+**Root cause:** With thinking mode off, `deepseek-v4-flash` still didn't
+reliably drive the supervisor -> sub-agent -> tool-call chain to
+completion; instead of failing loudly, it produced plausible-sounding
+completion text without ever calling a tool.
+
+**Solution:** Reverted to Groq (`openai/gpt-oss-20b`) immediately, `git`-
+level diff confirmed clean. Not pursuing further DeepSeek variants for
+now — noted as a future option only if DeepSeek ships a model that's been
+independently confirmed reliable on tool-calling, not something to keep
+re-testing speculatively.
+
+**Why it mattered:** a crash is safe — it's visible and retried or
+surfaced as an error. A model that fabricates "your account was opened"
+without opening it is a much worse failure mode for a banking assistant:
+wrong information delivered with full confidence, no error signal
+anywhere. Caught with exactly 2 live calls plus one free DB check, per the
+standing minimal-call-budget constraint — not a large eval, just enough to
+catch a real correctness break before it reached anyone.
+
+---
+
 ## Template for new entries
 
 ```

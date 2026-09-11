@@ -10,6 +10,8 @@ cross-agent shared data yet.
 
 from datetime import datetime, timezone
 
+from sqlalchemy import select
+
 from bank_platform.database import SessionLocal
 from bank_platform.interfaces import SessionStore
 from bank_platform.models import Session
@@ -69,6 +71,19 @@ def get_last_activity(session_id: str) -> datetime | None:
     try:
         row = db.get(Session, session_id)
         return row.updated_at if row is not None else None
+    finally:
+        db.close()
+
+
+def list_expired_session_ids(cutoff: datetime) -> list[str]:
+    """Session ids whose last activity is older than `cutoff` - the query
+    graph.py's periodic sweep needs to find abandoned sessions in bulk,
+    instead of the per-request expiry check which only ever looks at the
+    one session being used right now."""
+    db = SessionLocal()
+    try:
+        statement = select(Session.session_id).where(Session.updated_at < cutoff)
+        return list(db.execute(statement).scalars().all())
     finally:
         db.close()
 

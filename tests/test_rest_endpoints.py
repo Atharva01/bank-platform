@@ -1,3 +1,5 @@
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -93,6 +95,31 @@ def test_invalid_status_transition_returns_409(account):
     response = client.patch(f"/service-requests/{request_id}", json={"status": "completed"})
     assert response.status_code == 409
     assert response.json()["error_type"] == "InvalidStatusTransitionError"
+
+
+def test_delete_account_without_admin_key_returns_403(account):
+    response = client.delete(f"/accounts/{account}")
+    assert response.status_code == 403
+
+
+def test_delete_account_with_wrong_admin_key_returns_403(account):
+    response = client.delete(f"/accounts/{account}", headers={"X-Admin-Key": "not-the-real-key"})
+    assert response.status_code == 403
+
+
+def test_delete_account_cascades_to_transactions_and_service_requests(account):
+    txn_response = client.post(f"/accounts/{account}/transactions", json={"amount": 30})
+    transaction_id = txn_response.json()["id"]
+    svc_response = client.post(f"/accounts/{account}/service-requests", json={"request_type": "kyc_update"})
+    request_id = svc_response.json()["id"]
+
+    admin_key = os.environ["ADMIN_API_KEY"]
+    delete_response = client.delete(f"/accounts/{account}", headers={"X-Admin-Key": admin_key})
+    assert delete_response.status_code == 200
+
+    assert client.get(f"/accounts/{account}").status_code == 404
+    assert client.get(f"/transactions/{transaction_id}").status_code == 404
+    assert client.get(f"/service-requests/{request_id}").status_code == 404
 
 
 def test_chat_endpoint_unaffected():
