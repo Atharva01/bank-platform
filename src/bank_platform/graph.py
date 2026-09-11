@@ -6,7 +6,7 @@ delegate to and which tools to call, based on free-text user input.
 
 from datetime import datetime, timedelta, timezone
 
-from openai import BadRequestError
+from openai import APITimeoutError, BadRequestError
 
 from langchain.agents import create_agent
 from langgraph.checkpoint.postgres import PostgresSaver
@@ -104,7 +104,9 @@ service_agent = create_agent(model=llm, tools=SERVICE_TOOLS, system_prompt=SERVI
 # PostgresSaver needs a plain libpq-style URL, not SQLAlchemy's
 # dialect-qualified one (postgresql+psycopg://) - derived from the same
 # DATABASE_URL every other module uses, not a second hardcoded constant.
-_PG_CONN_STRING = DATABASE_URL.replace("postgresql+psycopg://", "postgresql://")
+# connect_timeout matches database.py's - without it, a dead/unreachable
+# Postgres can hang a request indefinitely instead of failing fast.
+_PG_CONN_STRING = DATABASE_URL.replace("postgresql+psycopg://", "postgresql://") + "?connect_timeout=10"
 _checkpointer_cm = PostgresSaver.from_conn_string(_PG_CONN_STRING)
 _checkpointer = _checkpointer_cm.__enter__()  # long-lived, module-level - mirrors every other module's one-time setup
 _checkpointer.setup()  # one-time: creates the checkpointer's own tables, separate from models.py
@@ -173,13 +175,15 @@ def _extract_reply(messages) -> str:
 
 
 def _invoke(message: str, session_id: str) -> dict:
-    """Runs the graph, resuming from its last checkpoint on gpt-oss-20b's
-    occasional tool-call parse failure (see llm.py) instead of restarting
-    the whole invocation. A restart would silently re-run any tool call
-    that already succeeded before the failure (e.g. double-applying a
-    deposit) - resuming via the same thread_id continues past the last
-    completed step instead, since LangGraph checkpoints after every
-    superstep and a completed tool call is never re-entered on resume.
+    """Runs the graph, resuming from its last checkpoint on a retryable LLM
+    failure (a malformed tool-call response the provider's own API rejects,
+    e.g. PROBLEMS.md #12/#19, or a request that timed out - see llm.py's
+    `timeout`) instead of restarting the whole invocation. A restart would
+    silently re-run any tool call that already succeeded before the
+    failure (e.g. double-applying a deposit) - resuming via the same
+    thread_id continues past the last completed step instead, since
+    LangGraph checkpoints after every superstep and a completed tool call
+    is never re-entered on resume.
 
     thread_id = session_id directly (Phase 4) - the caller's session now
     genuinely persists conversation history across separate /chat calls,
@@ -192,7 +196,7 @@ def _invoke(message: str, session_id: str) -> dict:
     for attempt in range(attempts):
         try:
             return supervisor.invoke(payload, config=config)
-        except BadRequestError:
+        except (BadRequestError, APITimeoutError):
             if attempt == attempts - 1:
                 raise
             payload = None  # resume from checkpoint, don't replay from scratch

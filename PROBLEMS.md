@@ -569,6 +569,53 @@ concrete trigger to finally act on the previously-validated Muse Spark
 fallback instead of tuning retry parameters on a provider with a known,
 recurring failure mode.
 
+## 20. Verifying the Muse Spark switch surfaced three independent bugs: a stuck dev-server reload, a still-too-low token cap, and no timeouts anywhere
+
+**Problem:** Re-verifying #19's provider switch with a curl repro of the
+exact UI failure produced three different, unrelated symptoms across
+three attempts: (1) a clean-looking reply that was actually still coming
+from Groq, (2) a generic fallback reply with no error, (3) the request
+hanging indefinitely with no response at all.
+
+**Root cause:** Three separate issues, each masking the next:
+1. `fastapi dev`'s `--reload` silently got stuck after editing `llm.py` -
+   "Reloading..." logged, but no new worker process ever started, so the
+   *old* Groq-configured worker kept serving requests. A generic-enough
+   reply from the stale worker was mistaken for confirmation of the
+   switch.
+2. Once actually on Muse Spark: `max_tokens=2048` was still too low - the
+   supervisor hit the cap mid-response on a bare account-ID message (no
+   verb, nothing to obviously delegate on) and never produced a tool call
+   or a usable reply, surfacing as `_extract_reply()`'s generic fallback
+   rather than an error.
+3. The apparent "hang": Docker Desktop's engine had crashed entirely
+   (`docker ps` couldn't even reach the daemon) at some point during this
+   session. Neither the LLM client (`llm.py`) nor the DB engine
+   (`database.py`)/checkpointer (`graph.py`) had any timeout configured,
+   so a dead Postgres - not Muse Spark - could hang a `/chat` request
+   indefinitely with no error and nothing to retry against.
+
+**Solution:** Always kill and fully restart the dev server after editing
+files under `src/bank_platform/` instead of trusting `--reload` (root
+cause of the reload hang itself not pursued further - not worth the
+investigation time). Raised `max_tokens` to 4096. Added `timeout=30` to
+the `ChatOpenAI` client and `connect_timeout=10` to both the SQLAlchemy
+engine and the checkpointer's raw Postgres connection string, so a
+stalled LLM or a dead DB fails fast instead of hanging forever; extended
+`graph.py`'s resume-retry logic to also catch `APITimeoutError`, not just
+the parse-rejection error. Re-ran the exact Alice-balance repro from the
+live UI end to end - correct account, correct balance, no hang.
+
+**Why it mattered:** three failures in a row that all "looked like" the
+new LLM provider being unreliable were actually a dev-tooling bug, a
+tuning gap, and an unrelated infrastructure crash, and a request could
+hang forever with zero diagnostic signal because nothing in the stack had
+a timeout. Fixing the actual causes instead of reverting the provider
+switch on a false signal - and closing the "nothing ever times out" gap
+for both the LLM and DB paths, not just the one that happened to surface
+first - is a meaningfully more resilient system than before this
+investigation started.
+
 ---
 
 ## Template for new entries

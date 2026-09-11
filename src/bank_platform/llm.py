@@ -11,11 +11,19 @@ systematic" per the retry logic in graph.py, but transient enough to hit
 as a working alternative (PROBLEMS.md #18) before this switch - passed the
 same real multi-turn supervisor test (genuine tool calls, correct DB
 writes, no hallucination) that DeepSeek failed three times (PROBLEMS.md
-#10, #14, #17). Needs `max_tokens=2048` (not 500) since it's more verbose
-than gpt-oss-20b. This is a paid model (contributor tier, ~$20/mo budget)
+#10, #14, #17). This is a paid model (contributor tier, ~$20/mo budget)
 versus Groq's free tier - an explicit cost-for-reliability tradeoff, made
 after Groq's transient failure actually surfaced in the live chat UI, not
 a routine swap.
+
+Two follow-up fixes after the switch (PROBLEMS.md #20): `max_tokens`
+raised again, 2048 -> 4096 - still too low for some replies (the
+supervisor hit the cap mid-response on a bare account-ID message with no
+verb, never reaching a tool call, surfaced as the generic fallback reply
+rather than an error). Also added `timeout=30` - there was no timeout at
+all before, so a slow/stalled response could block a `/chat` request
+indefinitely with nothing to retry against; graph.py's resume-on-failure
+logic now also retries on a timeout, not just a parse-rejection.
 
 Provider history, in case Muse Spark needs to be reverted:
 - DeepSeek's deepseek-flash/deepseek-v4-flash and Qwen3 (self-hosted via
@@ -44,5 +52,9 @@ llm = ChatOpenAI(
     base_url="https://api.meta.ai/v1",
     api_key=os.environ["MUSE_API_KEY"],
     temperature=0,
-    max_tokens=2048,
+    max_tokens=4096,
+    timeout=30,  # no timeout was set previously - a slow/stalled provider
+    # response blocked the whole /chat request indefinitely, with nothing
+    # to retry against (graph.py's resume logic only triggers on an actual
+    # error, not a hang). 30s is generous for a single completion call.
 )
