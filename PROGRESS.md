@@ -32,8 +32,11 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 | New validations | Reject negative `balance` / empty `owner_name` on account create; `request_type` restricted to `change_of_address` / `cheque_book_request` / `kyc_update` |
 | New error codes | `insufficient_funds`, `invalid_status_transition`, `validation_error` |
 | Bug to fix alongside | `transaction.create` currently never checks that `account_id` refers to a real account |
+| Money type | Balance/amount arithmetic switches from Python `float` to `Decimal` to avoid precision drift; Postgres columns already `Numeric(12,2)`, this is a Python-side-only fix |
 
-**Implementation order:** (1) crud commit refactor → (2) TransactionAgent balance/overdraft logic → (3) ServiceAgent status machine → (4) input validation on creates → (5) tests for all of the above, including new error paths.
+**Tech stack for this work:** plain Python classes for agents (no LangGraph/CrewAI/AutoGen — not worth the indirection until Phase 3 needs LLM reasoning loops); hand-rolled dict for the service status state machine (4 states, not worth a library like `transitions`); Pydantic continues to own input shape validation, business rules stay as plain `if` checks in each agent.
+
+**Implementation order:** (1) crud commit refactor → (2) TransactionAgent balance/overdraft logic with Decimal math → (3) ServiceAgent status machine → (4) input validation on creates → (5) tests for all of the above, including new error paths.
 
 Once this lands, Phase 1 moves to `Done` and Phase 2 (MCP Servers) resumes — retrofitting these same `crud_*` functions behind the `MCPClient` interface without changing agent code.
 
@@ -42,3 +45,4 @@ Once this lands, Phase 1 moves to `Done` and Phase 2 (MCP Servers) resumes — r
 - 2026-09-11 — Ledger created. Phase plan agreed; Python stack, LLM-based Coordinator routing decided.
 - 2026-09-11 — Phases 0 and 1 built in a CRUD-first detour (agents talk directly to Postgres, bypassing the MCP abstraction) to prove out agent coordination end-to-end before returning to the phased plan. Marked Done retroactively. Phase 2 is now the gap between current state and the original architecture diagram.
 - 2026-09-11 — Reopened Phase 1: CRUD passthrough alone isn't real agent business logic. Agreed a plan (balance linkage, overdraft rule, service status machine, input validation, atomic commits) before moving on to Phase 2.
+- 2026-09-11 — Discussed tech stack for the business-logic work: plain Python classes (no agent framework yet), hand-rolled state machine, and switching balance/amount math from float to Decimal to avoid precision drift.
