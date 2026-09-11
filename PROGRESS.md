@@ -1,6 +1,7 @@
 # Bank Platform — Phase Ledger
 
 Tracks SDLC progress against the phase plan. Update status as work moves through each phase.
+See [PROBLEMS.md](PROBLEMS.md) for the log of real issues hit and how they were solved.
 
 Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
