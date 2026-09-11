@@ -1,7 +1,7 @@
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from models import ServiceRequest
+from bank_platform.models import ServiceRequest
 
 
 def create_service_request(

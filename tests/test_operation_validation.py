@@ -1,6 +1,6 @@
 import pytest
 
-from agents import _operation
+from bank_platform.agents import _operation
 
 
 def test_valid_operation_is_returned():

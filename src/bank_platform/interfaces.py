@@ -21,9 +21,7 @@ class InProcessMCPClient(MCPClient):
     """
 
     def __init__(self):
-        import accounts_server
-        import service_server
-        import transactions_server
+        from bank_platform import accounts_server, service_server, transactions_server
 
         self._tools = {
             "create_account": accounts_server.create_account,

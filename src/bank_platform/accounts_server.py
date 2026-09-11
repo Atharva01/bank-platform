@@ -3,9 +3,9 @@ invariants: owner_name/balance validation. Each tool call is one atomic
 DB transaction — no session is ever shared across two calls.
 """
 
-import crud_accounts
-from database import SessionLocal
-from exceptions import NotFoundError, ValidationError
+from bank_platform import crud_accounts
+from bank_platform.database import SessionLocal
+from bank_platform.exceptions import NotFoundError, ValidationError
 
 
 def _invalid_owner_name(owner_name) -> bool:

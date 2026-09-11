@@ -2,9 +2,9 @@
 invariants: request_type allowlist, status transition state machine.
 """
 
-import crud_service
-from database import SessionLocal
-from exceptions import InvalidStatusTransitionError, NotFoundError, ValidationError
+from bank_platform import crud_service
+from bank_platform.database import SessionLocal
+from bank_platform.exceptions import InvalidStatusTransitionError, NotFoundError, ValidationError
 
 _ALLOWED_REQUEST_TYPES = {"change_of_address", "cheque_book_request", "kyc_update"}
 

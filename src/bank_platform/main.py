@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 
-from agents import AgentRequest, AgentResponse
-from coordinator import Coordinator
+from bank_platform.agents import AgentRequest, AgentResponse
+from bank_platform.coordinator import Coordinator
 
 app = FastAPI()
 coordinator = Coordinator()

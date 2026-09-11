@@ -3,9 +3,9 @@ Account.balance — create/update/delete all atomically keep balance in sync
 with the transaction ledger, including overdraft protection.
 """
 
-import crud_transactions
-from database import SessionLocal
-from exceptions import NotFoundError
+from bank_platform import crud_transactions
+from bank_platform.database import SessionLocal
+from bank_platform.exceptions import NotFoundError
 
 
 def _serialize(transaction) -> dict:

@@ -1,7 +1,7 @@
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
-from models import Account
+from bank_platform.models import Account
 
 
 def create_account(session: Session, owner_name: str, balance: float = 0):

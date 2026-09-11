@@ -1,6 +1,6 @@
-from agents import AccountsAgent, AgentRequest, ServiceAgent, TransactionAgent
-from database import SessionLocal
-from models import Account
+from bank_platform.agents import AccountsAgent, AgentRequest, ServiceAgent, TransactionAgent
+from bank_platform.database import SessionLocal
+from bank_platform.models import Account
 
 
 def _delete(model, id_):

@@ -1,6 +1,6 @@
-from agents import AccountsAgent, AgentRequest, ServiceAgent
-from database import SessionLocal
-from models import Account
+from bank_platform.agents import AccountsAgent, AgentRequest, ServiceAgent
+from bank_platform.database import SessionLocal
+from bank_platform.models import Account
 
 accounts_agent = AccountsAgent()
 service_agent = ServiceAgent()

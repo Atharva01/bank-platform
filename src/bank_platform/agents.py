@@ -3,13 +3,13 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from exceptions import (
+from bank_platform.exceptions import (
     InsufficientFundsError,
     InvalidStatusTransitionError,
     NotFoundError,
     ValidationError,
 )
-from interfaces import default_mcp_client
+from bank_platform.interfaces import default_mcp_client
 
 class AgentType(str, Enum):
     ACCOUNTS = 'accounts'

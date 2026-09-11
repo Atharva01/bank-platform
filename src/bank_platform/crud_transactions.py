@@ -3,8 +3,8 @@ from decimal import Decimal, InvalidOperation
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from exceptions import InsufficientFundsError, NotFoundError, ValidationError
-from models import Account, Transaction
+from bank_platform.exceptions import InsufficientFundsError, NotFoundError, ValidationError
+from bank_platform.models import Account, Transaction
 
 
 def create_transaction_and_update_balance(

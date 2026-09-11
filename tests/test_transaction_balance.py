@@ -1,8 +1,8 @@
 import uuid
 
-from agents import AccountsAgent, AgentRequest, TransactionAgent
-from database import SessionLocal
-from models import Account
+from bank_platform.agents import AccountsAgent, AgentRequest, TransactionAgent
+from bank_platform.database import SessionLocal
+from bank_platform.models import Account
 
 accounts_agent = AccountsAgent()
 txn_agent = TransactionAgent()

@@ -1,7 +1,7 @@
 import pytest
 
-from database import engine
-from models import Base
+from bank_platform.database import engine
+from bank_platform.models import Base
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -1,5 +1,5 @@
-from agents import AgentRequest
-from coordinator import Coordinator
+from bank_platform.agents import AgentRequest
+from bank_platform.coordinator import Coordinator
 
 coordinator = Coordinator()
 

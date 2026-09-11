@@ -1,4 +1,11 @@
-from agents import AccountsAgent, AgentRequest, AgentResponse, AgentType, ServiceAgent, TransactionAgent
+from bank_platform.agents import (
+    AccountsAgent,
+    AgentRequest,
+    AgentResponse,
+    AgentType,
+    ServiceAgent,
+    TransactionAgent,
+)
 
 _AGENTS = {
     AgentType.ACCOUNTS: AccountsAgent(),
