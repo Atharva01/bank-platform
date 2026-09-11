@@ -222,6 +222,64 @@ that specific test was run before committing to a model choice.
 
 ---
 
+## 11. Supervisor's final reply wasn't reliably in "the last message"
+
+**Problem:** After the supervisor hands off to a sub-agent and the sub-agent
+hands back, the supervisor's own closing message sometimes repeated the
+sub-agent's full answer verbatim, and sometimes was just a generic filler
+like "I'm here if you need anything else!" — observed across otherwise
+identical repeated calls (temperature=0). Naively returning `messages[-1]`
+as the reply to the user would silently drop the actual result about half
+the time.
+
+**Root cause:** `langgraph-supervisor`'s handback step doesn't guarantee the
+supervisor re-states the sub-agent's result — that's a property of the
+graph/model interaction, not a bug in this codebase, but it meant the "just
+take the last message" assumption was wrong.
+
+**Solution:** `graph.py`'s `_extract_reply()` walks messages in reverse and
+returns the first one that both has content *and* has no pending
+`tool_calls` (i.e. a genuine final turn, not a mid-handoff message) —
+regardless of whether it came from the supervisor or a sub-agent. This
+reliably surfaces the sub-agent's real answer even when the supervisor's own
+wrap-up is just filler.
+
+**Why it mattered:** Caught by inspecting the full message trace of a real
+invocation (not just the final reply), which showed the variance directly —
+a test that only checked "did we get a 200 response" would have missed this
+entirely, since a filler reply is still a valid, non-empty string.
+
+---
+
+## 12. Retrying the LLM client directly broke tool binding
+
+**Problem:** `gpt-oss-20b` on Groq occasionally throws
+`openai.BadRequestError: output_parse_failed` — Groq's own parser failing on
+a tool-call payload the model generated. Confirmed transient (3/3 manual
+retries of the identical call succeeded). The obvious fix,
+`llm.with_retry(stop_after_attempt=3)` wrapping the shared `ChatOpenAI`
+client in `llm.py`, seemed like the right place for it.
+
+**Root cause:** `.with_retry()` returns a `RunnableRetry` wrapper, which
+doesn't proxy `.bind_tools()` — and `langchain.agents.create_agent()` calls
+`.bind_tools()` on the model internally. Wrapping the client at that layer
+silently breaks every sub-agent's ability to use tools at all.
+
+**Solution:** Reverted the client-level wrap; added the retry instead at
+`graph.py`'s `run()` — around the *entire* `supervisor.invoke(...)` call,
+via `tenacity`. This is also more correct than retrying a single LLM call
+in isolation: the parse failure can occur inside any sub-agent's model node,
+several steps into the graph, so the safe retry boundary is the whole
+invocation, not one call buried inside it.
+
+**Why it mattered:** Caught by testing `.bind_tools()` on the wrapped client
+directly (`AttributeError: 'RunnableRetry' object has no attribute
+'bind_tools'`) before wiring it into the real graph — would otherwise have
+surfaced as every sub-agent silently having zero tools, a much more
+confusing failure mode to debug later.
+
+---
+
 ## Template for new entries
 
 ```
