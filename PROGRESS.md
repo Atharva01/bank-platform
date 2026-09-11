@@ -7,8 +7,8 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 | # | Phase | Status | Started | Completed | Notes |
 |---|-------|--------|---------|-----------|-------|
 | 0 | Contracts & Interfaces | Done | 2026-09-11 | 2026-09-11 | `AgentType`/`AgentRequest`/`AgentResponse`/`Agent` ABC in `agents.py`. `interfaces.py`'s `MCPClient`/`SessionStore` stubs written but not yet wired in |
-| 1 | Agent Business Logic | Done | 2026-09-11 | 2026-09-11 | Rule-based Coordinator + Accounts/Transaction/Service Agents, full CRUD, 11 pytest tests passing. Built straight against Postgres instead of Phase 0 stubs — agents currently call `crud_*` directly, not through `MCPClient` |
-| 2 | MCP Servers | Not Started | | | Retrofit: wrap existing `crud_accounts`/`crud_transactions`/`crud_service` behind the `MCPClient` interface so agents stop touching Postgres directly. Transport (real MCP protocol vs. in-process MCP-shaped interface) undecided |
+| 1 | Agent Business Logic | In Progress | 2026-09-11 | | CRUD passthrough done (13 pytest tests passing) but agents were thin proxies with no domain rules. Reopened to add real business logic before moving to Phase 2 — see plan in Current Focus below |
+| 2 | MCP Servers | Not Started | | | Deferred until Phase 1's business logic is complete. Retrofit: wrap `crud_accounts`/`crud_transactions`/`crud_service` behind the `MCPClient` interface so agents stop touching Postgres directly. Transport (real MCP protocol vs. in-process MCP-shaped interface) undecided |
 | 3 | LLM Integration | Not Started | | | Self-Hosted + Third-party LLM behind a switchable interface |
 | 4 | Session Store | Not Started | | | Conversation history + inter-agent shared state |
 | 5 | PII Redaction | Not Started | | | Redaction between agents and LLM layer |
@@ -20,9 +20,25 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
 ## Current Focus
 
-**Phase 2 — MCP Servers.** Decision pending: real MCP protocol (stdio/SDK, 3 separate processes) vs. an in-process MCP-shaped `MCPClient` implementation that can be swapped for the real protocol later without touching agent code.
+**Phase 1 (reopened) — give the agents real business logic before Phase 2 (MCP Servers).** Agreed plan, not yet implemented:
+
+| Area | Decision |
+|---|---|
+| Balance linkage | `transaction.create` atomically updates `Account.balance` |
+| Overdraft | Blocked — a debit that would take balance negative returns `insufficient_funds` |
+| Transaction direction | Signed `amount` (positive = credit, negative = debit) — no separate `type` field |
+| Service status | State machine: `pending → approved/rejected`, `approved → completed`; `completed`/`rejected` are terminal |
+| Atomicity | `crud_*` functions stop auto-committing (`add`/`flush` only); the agent commits once per `handle()` call and rolls back on rule failure |
+| New validations | Reject negative `balance` / empty `owner_name` on account create; `request_type` restricted to `change_of_address` / `cheque_book_request` / `kyc_update` |
+| New error codes | `insufficient_funds`, `invalid_status_transition`, `validation_error` |
+| Bug to fix alongside | `transaction.create` currently never checks that `account_id` refers to a real account |
+
+**Implementation order:** (1) crud commit refactor → (2) TransactionAgent balance/overdraft logic → (3) ServiceAgent status machine → (4) input validation on creates → (5) tests for all of the above, including new error paths.
+
+Once this lands, Phase 1 moves to `Done` and Phase 2 (MCP Servers) resumes — retrofitting these same `crud_*` functions behind the `MCPClient` interface without changing agent code.
 
 ## Change Log
 
 - 2026-09-11 — Ledger created. Phase plan agreed; Python stack, LLM-based Coordinator routing decided.
 - 2026-09-11 — Phases 0 and 1 built in a CRUD-first detour (agents talk directly to Postgres, bypassing the MCP abstraction) to prove out agent coordination end-to-end before returning to the phased plan. Marked Done retroactively. Phase 2 is now the gap between current state and the original architecture diagram.
+- 2026-09-11 — Reopened Phase 1: CRUD passthrough alone isn't real agent business logic. Agreed a plan (balance linkage, overdraft rule, service status machine, input validation, atomic commits) before moving on to Phase 2.
