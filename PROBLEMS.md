@@ -505,6 +505,38 @@ anywhere. Caught with exactly 2 live calls plus one free DB check, per the
 standing minimal-call-budget constraint — not a large eval, just enough to
 catch a real correctness break before it reached anyone.
 
+## 18. Meta Muse Spark validated as a Groq fallback (unlike DeepSeek)
+
+**Problem:** Evaluating `muse-spark-1.3-contributor` (Meta Model API,
+OpenAI-compatible, no separate `langchain-*` package needed) as another
+Groq alternative, on the same real multi-turn supervisor test that caught
+DeepSeek's failures (#10, #14, #16). First run: turn 1 (open an account)
+succeeded with a genuine, verified DB write — no hallucination, unlike
+DeepSeek. Turn 2 (ask that account's balance) returned the generic
+fallback reply instead of an answer.
+
+**Root cause:** Not a tool-calling or protocol problem this time —
+`supervisor.get_state()` showed `finish_reason: "length"` on the relevant
+messages: Muse Spark is more verbose than Groq's `gpt-oss-20b` and hit the
+existing `max_tokens=500` cap mid-response, producing empty content that
+`_extract_reply()` correctly couldn't use.
+
+**Solution:** Raised `max_tokens` to 2048 (only raises the ceiling — cost
+is per token actually generated, not per cap, so this doesn't meaningfully
+change spend) and re-ran the identical 2-call test. Both turns succeeded:
+correct tool calls, correct DB writes, accurate balance echoed back,
+verified independently against the database both times. 4 live calls
+spent total across both rounds, given the contributor-tier ($20/mo)
+budget constraint.
+
+**Why it mattered:** confirms Muse Spark is a genuinely viable Groq
+fallback — passes the exact test DeepSeek failed three times — not just a
+"looks fine on a simple prompt" result. Documented as an available,
+validated option (not switched to as the active provider — that's a
+cost/free-tier tradeoff call, not a correctness one) so it doesn't need
+re-proving from scratch if Groq's free-tier limits become a persistent
+blocker later.
+
 ---
 
 ## Template for new entries

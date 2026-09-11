@@ -13,13 +13,23 @@ supervisor handoff which is inherently multi-turn) or leak raw <think>...
 (Qwen3). gpt-oss-20b returns clean content with no reasoning pass-back
 requirement, and is cheap ($0.075/$0.30 per 1M input/output tokens).
 
-Re-checked a third time (PROBLEMS.md #16) with `deepseek-v4-flash` +
-`extra_body={"thinking": {"type": "disabled"}}`, which does stop the
+Re-checked DeepSeek a third time (PROBLEMS.md #16) with `deepseek-v4-flash`
++ `extra_body={"thinking": {"type": "disabled"}}`, which does stop the
 reasoning_content crash — but on a real multi-turn supervisor run it
 silently hallucinated a completed account-opening (confident natural-
 language "done" replies) without ever calling a tool: nothing was written
 to the database. That's a worse failure mode than the crash it replaced
-(silent, not loud), so DeepSeek is rejected again. Reverted to Groq.
+(silent, not loud), so DeepSeek is rejected again.
+
+Meta Muse Spark (`muse-spark-1.3-contributor`, via `api.meta.ai/v1`) was
+also live-tested (PROBLEMS.md #18) and, unlike DeepSeek, PASSED the same
+real multi-turn supervisor test — genuine tool calls, correct DB writes,
+no hallucination. Not switched to as the active provider (Groq stays
+active) purely because it's paid (contributor-tier budget, ~$20/mo) versus
+Groq's free tier, not because of any correctness issue found. Documented
+as a validated fallback option, ready to flip on later if Groq's free-tier
+limits become a persistent blocker - see llm.py's git history for the
+exact working config if/when that happens.
 """
 
 import os
