@@ -14,5 +14,13 @@ ACCOUNTS_TOOLS = [
     ),
     StructuredTool.from_function(func=tool_safe(accounts_server.get_account), handle_tool_error=True),
     StructuredTool.from_function(func=tool_safe(accounts_server.update_account), handle_tool_error=True),
-    StructuredTool.from_function(func=tool_safe(accounts_server.delete_account), handle_tool_error=True),
+    # delete_account is deliberately NOT exposed here - closing an account
+    # is not a customer/agent self-service action, it needs elevated
+    # (staff/admin) access that doesn't exist yet (no IAM - see Phase 6).
+    # No "apply for closure" path exists yet either (service_agent's
+    # request_type allowlist has no closure type) - that's a real gap, not
+    # implemented here, flagged for whoever builds the admin/IAM layer.
+    # accounts_server.delete_account itself is untouched and still used by
+    # test cleanup helpers - only its customer/agent-facing exposure is
+    # removed.
 ]

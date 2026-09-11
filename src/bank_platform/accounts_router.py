@@ -44,6 +44,13 @@ async def update_account(account_id: str, body: UpdateAccountRequest):
     return accounts_server.update_account(account_id, owner_name=body.owner_name, balance=body.balance)
 
 
+# Deliberately NOT wired into ACCOUNTS_TOOLS (accounts_tools.py) - closing
+# an account is not a customer/agent self-service action. This raw REST
+# endpoint stays reachable for a future elevated-access (staff/admin)
+# caller, but there's no IAM/auth layer yet (Phase 6) gating it - it is
+# NOT currently access-controlled. Isolating it from the agent/chat path
+# is the fix in scope right now; locking down who can call this endpoint
+# directly is separate, unstarted work.
 @router.delete("/{account_id}", response_model=AccountResponse)
 async def delete_account(account_id: str):
     return accounts_server.delete_account(account_id)
