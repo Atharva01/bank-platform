@@ -1,9 +1,9 @@
-from bank_platform.agents import AccountsAgent, AgentRequest, ServiceAgent
-from bank_platform.database import SessionLocal
-from bank_platform.models import Account
+import pytest
 
-accounts_agent = AccountsAgent()
-service_agent = ServiceAgent()
+from bank_platform import accounts_server, service_server
+from bank_platform.database import SessionLocal
+from bank_platform.exceptions import ValidationError
+from bank_platform.models import Account
 
 
 def _delete_account(account_id):
@@ -18,103 +18,61 @@ def _delete_account(account_id):
 
 
 def test_negative_balance_on_create_is_rejected():
-    response = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Bad Balance", "balance": -10},
-    ))
-    assert response.success is False
-    assert response.error == "validation_error"
+    with pytest.raises(ValidationError):
+        accounts_server.create_account(owner_name="Bad Balance", balance=-10)
 
 
 def test_empty_owner_name_on_create_is_rejected():
-    response = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "   ", "balance": 0},
-    ))
-    assert response.success is False
-    assert response.error == "validation_error"
+    with pytest.raises(ValidationError):
+        accounts_server.create_account(owner_name="   ", balance=0)
 
 
 def test_negative_balance_on_update_is_rejected():
-    created = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Update Test", "balance": 50},
-    ))
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Update Test", balance=50)
+    account_id = created["id"]
     try:
-        response = accounts_agent.handle(AgentRequest(
-            session_id="s1", user_query="edit", intent="accounts.update",
-            payload={"id": account_id, "balance": -5},
-        ))
-        assert response.success is False
-        assert response.error == "validation_error"
+        with pytest.raises(ValidationError):
+            accounts_server.update_account(account_id, balance=-5)
     finally:
         _delete_account(account_id)
 
 
 def test_empty_owner_name_on_update_is_rejected():
-    created = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Update Test", "balance": 50},
-    ))
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Update Test", balance=50)
+    account_id = created["id"]
     try:
-        response = accounts_agent.handle(AgentRequest(
-            session_id="s1", user_query="edit", intent="accounts.update",
-            payload={"id": account_id, "owner_name": ""},
-        ))
-        assert response.success is False
-        assert response.error == "validation_error"
+        with pytest.raises(ValidationError):
+            accounts_server.update_account(account_id, owner_name="")
     finally:
         _delete_account(account_id)
 
 
 def test_valid_balance_update_still_works():
-    created = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Update Test", "balance": 50},
-    ))
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Update Test", balance=50)
+    account_id = created["id"]
     try:
-        response = accounts_agent.handle(AgentRequest(
-            session_id="s1", user_query="edit", intent="accounts.update",
-            payload={"id": account_id, "balance": 200},
-        ))
-        assert response.success is True
-        assert response.data["balance"] == 200
+        updated = accounts_server.update_account(account_id, balance=200)
+        assert updated["balance"] == 200
     finally:
         _delete_account(account_id)
 
 
 def test_unknown_request_type_on_service_create_is_rejected():
-    created = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Service Validation", "balance": 0},
-    ))
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Service Validation", balance=0)
+    account_id = created["id"]
     try:
-        response = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="bogus request", intent="service.create",
-            payload={"account_id": account_id, "request_type": "loan_application"},
-        ))
-        assert response.success is False
-        assert response.error == "validation_error"
+        with pytest.raises(ValidationError):
+            service_server.create_service_request(account_id, "loan_application")
     finally:
         _delete_account(account_id)
 
 
 def test_known_request_types_are_accepted():
-    created = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Service Validation", "balance": 0},
-    ))
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Service Validation", balance=0)
+    account_id = created["id"]
     try:
         for request_type in ("change_of_address", "cheque_book_request", "kyc_update"):
-            response = service_agent.handle(AgentRequest(
-                session_id="s1", user_query="request", intent="service.create",
-                payload={"account_id": account_id, "request_type": request_type},
-            ))
-            assert response.success is True, request_type
+            response = service_server.create_service_request(account_id, request_type)
+            assert response["request_type"] == request_type
     finally:
         _delete_account(account_id)

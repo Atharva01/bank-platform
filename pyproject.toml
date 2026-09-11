@@ -11,11 +11,13 @@ dependencies = [
     "langchain-openai>=1.6.2",
     "langgraph>=1.2.11",
     "langgraph-supervisor>=0.0.31",
+    "openai>=3.13.0",
     "psycopg[binary]>=3.3.5",
     "pydantic>=2.13.5",
     "pytest>=9.1.1",
     "python-dotenv>=1.2.3",
     "sqlalchemy>=2.0.52",
+    "tenacity>=9.1.4",
 ]
 
 [build-system]

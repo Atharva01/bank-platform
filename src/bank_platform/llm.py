@@ -28,3 +28,8 @@ llm = ChatOpenAI(
     temperature=0,
     max_tokens=500,  # keeps requests within Groq's free-tier output-tokens-per-minute limit
 )
+# Note: gpt-oss-20b occasionally emits a tool-call payload Groq's own parser
+# can't parse (openai.BadRequestError: output_parse_failed) - observed as
+# transient, not systematic. Retrying belongs at the graph-invocation level
+# (graph.py's invoke_supervisor), not here - .with_retry() on this client
+# would break .bind_tools(), which create_agent() needs internally.

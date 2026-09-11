@@ -1,5 +1,8 @@
-from bank_platform.agents import AccountsAgent, AgentRequest, ServiceAgent, TransactionAgent
+import pytest
+
+from bank_platform import accounts_server, service_server, transactions_server
 from bank_platform.database import SessionLocal
+from bank_platform.exceptions import NotFoundError
 from bank_platform.models import Account
 
 
@@ -15,176 +18,73 @@ def _delete(model, id_):
 
 
 def test_accounts_full_crud_cycle():
-    agent = AccountsAgent()
-
-    created = agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Jane", "balance": 100},
-    ))
-    assert created.success is True
-    account_id = created.data["id"]
+    created = accounts_server.create_account(owner_name="Jane", balance=100)
+    account_id = created["id"]
 
     try:
-        read = agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="accounts.read",
-            payload={"id": account_id},
-        ))
-        assert read.success is True
-        assert read.data["owner_name"] == "Jane"
+        read = accounts_server.get_account(account_id)
+        assert read["owner_name"] == "Jane"
 
-        updated = agent.handle(AgentRequest(
-            session_id="s1", user_query="rename", intent="accounts.update",
-            payload={"id": account_id, "owner_name": "Jane Doe"},
-        ))
-        assert updated.success is True
-        assert updated.data["owner_name"] == "Jane Doe"
+        updated = accounts_server.update_account(account_id, owner_name="Jane Doe")
+        assert updated["owner_name"] == "Jane Doe"
 
-        deleted = agent.handle(AgentRequest(
-            session_id="s1", user_query="close", intent="accounts.delete",
-            payload={"id": account_id},
-        ))
-        assert deleted.success is True
+        deleted = accounts_server.delete_account(account_id)
+        assert deleted["id"] == account_id
 
-        gone = agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="accounts.read",
-            payload={"id": account_id},
-        ))
-        assert gone.success is False
-        assert gone.error == "not_found"
+        with pytest.raises(NotFoundError):
+            accounts_server.get_account(account_id)
     finally:
         _delete(Account, account_id)
-
-
-def test_accounts_missing_field_returns_clean_error():
-    agent = AccountsAgent()
-
-    response = agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create", payload={},
-    ))
-    assert response.success is False
-    assert response.error == "missing_field"
 
 
 def test_transaction_full_crud_cycle():
-    accounts_agent = AccountsAgent()
-    txn_agent = TransactionAgent()
-
-    account = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Transaction Test", "balance": 0},
-    ))
-    account_id = account.data["id"]
+    account = accounts_server.create_account(owner_name="Transaction Test", balance=0)
+    account_id = account["id"]
 
     try:
-        created = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="deposit", intent="transaction.create",
-            payload={"account_id": account_id, "amount": 50, "description": "deposit"},
-        ))
-        assert created.success is True
-        assert created.data["amount"] == 50
-        txn_id = created.data["id"]
+        created = transactions_server.create_transaction(account_id, 50, "deposit")
+        assert created["amount"] == 50
+        txn_id = created["id"]
 
-        read = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="transaction.read",
-            payload={"id": txn_id},
-        ))
-        assert read.success is True
-        assert read.data["description"] == "deposit"
+        read = transactions_server.get_transaction(txn_id)
+        assert read["description"] == "deposit"
 
-        listed = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="statement", intent="transaction.list",
-            payload={"account_id": account_id},
-        ))
-        assert listed.success is True
-        assert any(t["id"] == txn_id for t in listed.data["transactions"])
+        listed = transactions_server.list_transactions(account_id)
+        assert any(t["id"] == txn_id for t in listed)
 
-        updated = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="correct", intent="transaction.update",
-            payload={"id": txn_id, "amount": 75},
-        ))
-        assert updated.success is True
-        assert updated.data["amount"] == 75
+        updated = transactions_server.update_transaction(txn_id, amount=75)
+        assert updated["amount"] == 75
 
-        deleted = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="reverse", intent="transaction.delete",
-            payload={"id": txn_id},
-        ))
-        assert deleted.success is True
+        deleted = transactions_server.delete_transaction(txn_id)
+        assert deleted["id"] == txn_id
 
-        gone = txn_agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="transaction.read",
-            payload={"id": txn_id},
-        ))
-        assert gone.success is False
-        assert gone.error == "not_found"
+        with pytest.raises(NotFoundError):
+            transactions_server.get_transaction(txn_id)
     finally:
         _delete(Account, account_id)
-
-
-def test_transaction_missing_field_returns_clean_error():
-    agent = TransactionAgent()
-
-    response = agent.handle(AgentRequest(
-        session_id="s1", user_query="deposit", intent="transaction.create", payload={},
-    ))
-    assert response.success is False
-    assert response.error == "missing_field"
 
 
 def test_service_full_crud_cycle():
-    accounts_agent = AccountsAgent()
-    service_agent = ServiceAgent()
-
-    account = accounts_agent.handle(AgentRequest(
-        session_id="s1", user_query="open account", intent="accounts.create",
-        payload={"owner_name": "Service Test", "balance": 0},
-    ))
-    account_id = account.data["id"]
+    account = accounts_server.create_account(owner_name="Service Test", balance=0)
+    account_id = account["id"]
 
     try:
-        created = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="update address", intent="service.create",
-            payload={"account_id": account_id, "request_type": "change_of_address", "details": "123 New St"},
-        ))
-        assert created.success is True
-        assert created.data["status"] == "pending"
-        request_id = created.data["id"]
+        created = service_server.create_service_request(
+            account_id, "change_of_address", "123 New St"
+        )
+        assert created["status"] == "pending"
+        request_id = created["id"]
 
-        read = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="service.read",
-            payload={"id": request_id},
-        ))
-        assert read.success is True
-        assert read.data["request_type"] == "change_of_address"
+        read = service_server.get_service_request(request_id)
+        assert read["request_type"] == "change_of_address"
 
-        updated = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="approve", intent="service.update",
-            payload={"id": request_id, "status": "approved"},
-        ))
-        assert updated.success is True
-        assert updated.data["status"] == "approved"
+        updated = service_server.update_service_request(request_id, status="approved")
+        assert updated["status"] == "approved"
 
-        deleted = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="cancel", intent="service.delete",
-            payload={"id": request_id},
-        ))
-        assert deleted.success is True
+        deleted = service_server.delete_service_request(request_id)
+        assert deleted["id"] == request_id
 
-        gone = service_agent.handle(AgentRequest(
-            session_id="s1", user_query="check", intent="service.read",
-            payload={"id": request_id},
-        ))
-        assert gone.success is False
-        assert gone.error == "not_found"
+        with pytest.raises(NotFoundError):
+            service_server.get_service_request(request_id)
     finally:
         _delete(Account, account_id)
-
-
-def test_service_missing_field_returns_clean_error():
-    agent = ServiceAgent()
-
-    response = agent.handle(AgentRequest(
-        session_id="s1", user_query="update address", intent="service.create", payload={},
-    ))
-    assert response.success is False
-    assert response.error == "missing_field"
