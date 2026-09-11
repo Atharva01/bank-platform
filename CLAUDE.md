@@ -1,7 +1,7 @@
 # bank-platform
 
 Multi-agent banking assistant, built against a reference architecture diagram
-(`ad3ccd54-9532-4b2b-b8f9-b837caf40af1_image.png`, "Step 14: Edge Layer
+(`assets\ad3ccd54-9532-4b2b-b8f9-b837caf40af1_image.png`, "Step 14: Edge Layer
 Security"). Coordinator + Accounts/Transaction/Service agents, backed by
 Postgres, with MCP servers, LLM routing, and everything else in the diagram
 deferred to later phases.
