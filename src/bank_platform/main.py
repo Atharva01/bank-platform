@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from bank_platform import accounts_router, service_router, transactions_router
 from bank_platform.exceptions import (
@@ -51,7 +51,7 @@ for _exc_type in _ERROR_STATUS:
 
 
 class ChatRequest(BaseModel):
-    session_id: str
+    session_id: str = Field(min_length=1)
     message: str
 
 
@@ -66,5 +66,5 @@ async def home():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    reply = run(request.message)
+    reply = run(request.message, request.session_id)
     return ChatResponse(reply=reply)

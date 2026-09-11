@@ -398,6 +398,41 @@ support.
 
 ---
 
+## 15. Reply extraction searched the entire conversation, not just this turn
+
+**Problem:** While verifying Phase 4's new conversation continuity live, a
+second `/chat` message in the same session came back with a reply
+identical, word-for-word (including the same transaction ID), to the
+first message's reply — a plausible sign the second turn's answer was
+never actually surfaced.
+
+**Root cause:** `_extract_reply()` (see #11) walks `messages` in reverse
+looking for the last `AIMessage` with content and no pending tool calls.
+That was safe by construction when every thread was single-use (`graph.py`
+generated a fresh UUID per request, so "the whole message list" and "this
+turn's messages" were always the same set) — but Phase 4 made threads
+persist across separate `run()` calls, and the function was never updated
+to account for that. If a turn's own final answer were ever missing for
+any reason, the reverse search would silently fall through to an *earlier*
+turn's stored answer instead of surfacing that something was wrong.
+
+**Solution:** `run()` now reads the thread's message count via
+`supervisor.get_state(config)` *before* invoking (a local checkpointer
+read, not an LLM call), and passes only `result["messages"][prior_count:]`
+— the messages this specific invocation actually added — to
+`_extract_reply()`.
+
+**Why it mattered:** Caught by testing the actual new capability
+end-to-end (real multi-turn continuity) rather than just unit-testing the
+pieces in isolation — the same lesson as #10 and #14, applied to a
+different symptom. Also honestly incomplete: Groq's daily cap was hit
+again right after finding this, so the fix is reasoned-correct and
+verified by direct state inspection (new-thread edge case, message-count
+slicing logic) but not re-confirmed with another live multi-turn call —
+flagged rather than silently assumed fixed.
+
+---
+
 ## Template for new entries
 
 ```

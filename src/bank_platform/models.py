@@ -1,6 +1,7 @@
 import uuid
+from datetime import datetime, timezone
 
-from sqlalchemy import String, Numeric
+from sqlalchemy import JSON, DateTime, String, Numeric
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
@@ -29,3 +30,15 @@ class ServiceRequest(Base):
     request_type: Mapped[str] = mapped_column(String)
     details: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")
+
+class Session(Base):
+    """Inter-agent shared state store (Phase 4) - separate from conversation
+    history, which lives in the LangGraph checkpointer's own tables. Nothing
+    reads/writes this yet; see session_store.py."""
+    __tablename__ = "sessions"
+
+    session_id: Mapped[str] = mapped_column(String, primary_key=True)
+    data: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
+    )

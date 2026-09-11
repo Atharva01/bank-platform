@@ -4,18 +4,26 @@ agents.py's fixed intent-parsing — the LLM now decides which sub-agent to
 delegate to and which tools to call, based on free-text user input.
 """
 
-import uuid
+from datetime import datetime, timedelta, timezone
 
 from openai import BadRequestError
 
 from langchain.agents import create_agent
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph_supervisor import create_supervisor
 
+from bank_platform import session_store
 from bank_platform.accounts_tools import ACCOUNTS_TOOLS
+from bank_platform.database import DATABASE_URL
 from bank_platform.llm import llm
 from bank_platform.service_tools import SERVICE_TOOLS
+from bank_platform.tool_utils import _completed_calls
 from bank_platform.transactions_tools import TRANSACTIONS_TOOLS
+
+# Idle-session timeout (Phase 4 - Session Store). Deliberately short: this
+# is scoped as focused, single-sitting banking interactions, not a
+# long-lived chat session - decided with the user, not an arbitrary default.
+SESSION_IDLE_TIMEOUT = timedelta(minutes=10)
 
 # Named module-level constants (not inline literals) so their content can
 # be unit-tested directly - e.g. "does the supervisor prompt still mention
@@ -93,13 +101,37 @@ transaction_agent = create_agent(
 )
 service_agent = create_agent(model=llm, tools=SERVICE_TOOLS, system_prompt=SERVICE_AGENT_PROMPT, name="service_agent")
 
-_checkpointer = InMemorySaver()
+# PostgresSaver needs a plain libpq-style URL, not SQLAlchemy's
+# dialect-qualified one (postgresql+psycopg://) - derived from the same
+# DATABASE_URL every other module uses, not a second hardcoded constant.
+_PG_CONN_STRING = DATABASE_URL.replace("postgresql+psycopg://", "postgresql://")
+_checkpointer_cm = PostgresSaver.from_conn_string(_PG_CONN_STRING)
+_checkpointer = _checkpointer_cm.__enter__()  # long-lived, module-level - mirrors every other module's one-time setup
+_checkpointer.setup()  # one-time: creates the checkpointer's own tables, separate from models.py
 
 supervisor = create_supervisor(
     agents=[accounts_agent, transaction_agent, service_agent],
     model=llm,
     prompt=SUPERVISOR_PROMPT,
 ).compile(checkpointer=_checkpointer)
+
+
+def _expire_if_idle(session_id: str) -> None:
+    """Lazy, per-session expiry - no scheduler exists in this project, so
+    this runs once per /chat request instead of a background sweep. Only
+    touches the session actually being used, so cost is proportional to
+    real traffic. An abandoned session that's never messaged again still
+    lingers in Postgres (checkpointer tables + sessions table) - accepted
+    as normal DB housekeeping, not the original RAM-leak bug; a real
+    periodic sweep is a reasonable later addition, not needed now.
+    """
+    last_activity = session_store.get_last_activity(session_id)
+    if last_activity is None:
+        return  # new session, nothing to expire
+    if datetime.now(timezone.utc) - last_activity > SESSION_IDLE_TIMEOUT:
+        _checkpointer.delete_thread(session_id)
+        _completed_calls.pop(session_id, None)
+        session_store.delete(session_id)
 
 
 def _extract_reply(messages) -> str:
@@ -118,7 +150,7 @@ def _extract_reply(messages) -> str:
     return "I couldn't process that request."
 
 
-def _invoke(message: str) -> dict:
+def _invoke(message: str, session_id: str) -> dict:
     """Runs the graph, resuming from its last checkpoint on gpt-oss-20b's
     occasional tool-call parse failure (see llm.py) instead of restarting
     the whole invocation. A restart would silently re-run any tool call
@@ -126,9 +158,13 @@ def _invoke(message: str) -> dict:
     deposit) - resuming via the same thread_id continues past the last
     completed step instead, since LangGraph checkpoints after every
     superstep and a completed tool call is never re-entered on resume.
+
+    thread_id = session_id directly (Phase 4) - the caller's session now
+    genuinely persists conversation history across separate /chat calls,
+    instead of a fresh UUID being generated (and immortalized) on every
+    single request.
     """
-    thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": session_id}}
     payload = {"messages": [{"role": "user", "content": message}]}
     attempts = 3
     for attempt in range(attempts):
@@ -140,8 +176,22 @@ def _invoke(message: str) -> dict:
             payload = None  # resume from checkpoint, don't replay from scratch
 
 
-def run(message: str) -> str:
-    """Runs one user message through the supervisor graph and returns the
-    final natural-language reply."""
-    result = _invoke(message)
-    return _extract_reply(result["messages"])
+def run(message: str, session_id: str) -> str:
+    """Runs one user message through the supervisor graph, within the given
+    session's conversation, and returns the final natural-language reply.
+
+    _extract_reply() only searches messages added by THIS invocation, not
+    the full persisted history (Phase 4 made threads multi-use across
+    separate run() calls, unlike before when a thread was always
+    single-use and "whole history" and "this turn" were the same set) -
+    otherwise, if this turn somehow produced no fresh final AIMessage, the
+    heuristic would silently fall back to an EARLIER turn's stored answer
+    instead of surfacing that something went wrong.
+    """
+    _expire_if_idle(session_id)
+    session_store.touch(session_id)
+    config = {"configurable": {"thread_id": session_id}}
+    prior_state = supervisor.get_state(config)
+    prior_count = len(prior_state.values.get("messages", [])) if prior_state.values else 0
+    result = _invoke(message, session_id)
+    return _extract_reply(result["messages"][prior_count:])
