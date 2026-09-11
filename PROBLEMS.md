@@ -537,6 +537,38 @@ cost/free-tier tradeoff call, not a correctness one) so it doesn't need
 re-proving from scratch if Groq's free-tier limits become a persistent
 blocker later.
 
+## 19. Groq exhausted its retry budget in real use; switched active provider to Muse Spark
+
+**Problem:** While testing the new chat UI, a real request hit Groq's
+`gpt-oss-20b` tool-call parse failure (`output_parse_failed`, PROBLEMS.md
+#12) and got a raw 500 back through `/chat` — the frontend showed
+"Couldn't reach the server" instead of a reply.
+
+**Root cause:** `graph.py`'s `_invoke()` already retries this specific
+failure up to 3 times via checkpoint-resume, and does so silently (no log
+line on a caught-and-retried attempt) - so what looked like a fresh
+one-off failure was actually all 3 retries failing back-to-back on this
+one request, then the final attempt's exception propagating uncaught by
+design (`attempt == attempts - 1` re-raises). Confirmed via the backend
+traceback: the exception originates inside `supervisor.invoke()`, exactly
+where `_invoke()`'s try/except wraps it, so the retry logic itself wasn't
+broken - it was just used up.
+
+**Solution:** Rather than tune Groq's retry count/backoff, switched the
+active provider to Meta Muse Spark (`muse-spark-1.3-contributor`),
+already validated on the harder multi-turn tool-calling test (PROBLEMS.md
+#18) before this failure ever happened. `llm.py` updated; confirmed live
+via the real `/chat` endpoint post-switch. Groq's config and the reasoning
+for each rejected/accepted provider kept in `llm.py`'s docstring in case a
+revert is ever needed.
+
+**Why it mattered:** this was the first time a documented "transient, not
+systematic" limitation (PROBLEMS.md #12) actually surfaced through the
+real UI instead of just being a theoretical risk noted in passing - a
+concrete trigger to finally act on the previously-validated Muse Spark
+fallback instead of tuning retry parameters on a provider with a known,
+recurring failure mode.
+
 ---
 
 ## Template for new entries
