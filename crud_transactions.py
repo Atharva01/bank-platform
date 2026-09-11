@@ -1,6 +1,6 @@
 from decimal import Decimal, InvalidOperation
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from exceptions import InsufficientFundsError, NotFoundError, ValidationError
@@ -51,36 +51,69 @@ def get_transactions_for_account(session: Session, account_id: str):
     return result.scalars().all()
 
 
-def update_transaction(
+def update_transaction_and_adjust_balance(
     session: Session,
     transaction_id: str,
-    amount: float | None = None,
+    amount=None,
     description: str | None = None,
 ):
-    update_data = {}
-
-    if isinstance(amount, (float, int)):
-        update_data["amount"] = amount
-
-    if isinstance(description, str):
-        update_data["description"] = description
-
-    if update_data:
-        statement = (
-            update(Transaction).where(Transaction.id == transaction_id).values(**update_data)
-        )
-        session.execute(statement)
-        session.flush()
-
-    return get_transaction(session, transaction_id)
-
-
-def delete_transaction(session: Session, transaction_id: str):
+    """Atomically edits a transaction, reversing its old balance effect and
+    applying the new one if amount changes. Raises NotFoundError if the
+    transaction or its account doesn't exist, InsufficientFundsError if the
+    new amount would take the balance negative.
+    """
     transaction = session.get(Transaction, transaction_id)
     if transaction is None:
-        return None
+        raise NotFoundError(f"Transaction {transaction_id} not found")
 
+    if amount is not None:
+        try:
+            new_amount = Decimal(str(amount))
+        except InvalidOperation:
+            raise ValidationError(f"amount must be a number, got {amount!r}")
+        if new_amount == 0:
+            raise ValidationError("amount must not be zero")
+
+        account = session.get(Account, transaction.account_id)
+        if account is None:
+            raise NotFoundError(f"Account {transaction.account_id} not found")
+
+        delta = new_amount - transaction.amount
+        new_balance = account.balance + delta
+        if new_balance < 0:
+            raise InsufficientFundsError(
+                f"Insufficient funds: balance {account.balance}, delta {delta}"
+            )
+        account.balance = new_balance
+        transaction.amount = new_amount
+
+    if description is not None:
+        transaction.description = description
+
+    session.flush()
+    return transaction
+
+
+def delete_transaction_and_adjust_balance(session: Session, transaction_id: str):
+    """Atomically deletes a transaction and reverses its balance effect.
+    Raises NotFoundError if the transaction or its account doesn't exist,
+    InsufficientFundsError if reversing it would take the balance negative.
+    """
+    transaction = session.get(Transaction, transaction_id)
+    if transaction is None:
+        raise NotFoundError(f"Transaction {transaction_id} not found")
+
+    account = session.get(Account, transaction.account_id)
+    if account is None:
+        raise NotFoundError(f"Account {transaction.account_id} not found")
+
+    new_balance = account.balance - transaction.amount
+    if new_balance < 0:
+        raise InsufficientFundsError(
+            f"Deleting this transaction would leave balance at {new_balance}"
+        )
+
+    account.balance = new_balance
     session.delete(transaction)
     session.flush()
-
     return transaction

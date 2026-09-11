@@ -3,8 +3,13 @@ from enum import Enum
 
 from pydantic import BaseModel
 
-from database import SessionLocal
-from exceptions import InsufficientFundsError, NotFoundError, ValidationError
+from exceptions import (
+    InsufficientFundsError,
+    InvalidStatusTransitionError,
+    NotFoundError,
+    ValidationError,
+)
+from interfaces import default_mcp_client
 
 class AgentType(str, Enum):
     ACCOUNTS = 'accounts'
@@ -31,6 +36,9 @@ class Agent(ABC):
 
     agent_type: AgentType
 
+    def __init__(self, mcp_client=None):
+        self.mcp_client = mcp_client or default_mcp_client
+
     @abstractmethod
     def handle(self, request: AgentRequest) -> AgentResponse: ...
 
@@ -51,290 +59,173 @@ def _operation(intent: str | None) -> str:
     return op
 
 
-def _invalid_owner_name(owner_name) -> bool:
-    return not isinstance(owner_name, str) or not owner_name.strip()
-
-
-def _invalid_balance(balance) -> bool:
-    return not isinstance(balance, (int, float)) or isinstance(balance, bool) or balance < 0
-
-
 class AccountsAgent(Agent):
     agent_type = AgentType.ACCOUNTS
 
     def handle(self, request: AgentRequest) -> AgentResponse:
-        import crud_accounts
-
-        session = SessionLocal()
         payload = request.payload or {}
         try:
-            try:
-                op = _operation(request.intent)
-            except ValueError as e:
-                return AgentResponse(
-                    agent=self.agent_type, success=False, message=str(e),
-                    error="invalid_intent",
-                )
+            op = _operation(request.intent)
+        except ValueError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e),
+                error="invalid_intent",
+            )
 
+        try:
             if op == "create":
-                owner_name = payload["owner_name"]
-                balance = payload.get("balance", 0)
-                if _invalid_owner_name(owner_name):
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="owner_name must be a non-empty string",
-                        error="validation_error",
-                    )
-                if _invalid_balance(balance):
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="balance must not be negative",
-                        error="validation_error",
-                    )
-                account = crud_accounts.create_account(session, owner_name, balance)
+                data = self.mcp_client.call_tool("create_account", {
+                    "owner_name": payload["owner_name"], "balance": payload.get("balance", 0),
+                })
             elif op == "read":
-                account = crud_accounts.get_account(session, payload["id"])
-                if account is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Account not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("get_account", {"id": payload["id"]})
             elif op == "update":
-                owner_name = payload.get("owner_name")
-                balance = payload.get("balance")
-                if owner_name is not None and _invalid_owner_name(owner_name):
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="owner_name must be a non-empty string",
-                        error="validation_error",
-                    )
-                if balance is not None and _invalid_balance(balance):
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="balance must not be negative",
-                        error="validation_error",
-                    )
-                account = crud_accounts.update_account(
-                    session, payload["id"], owner_name=owner_name, balance=balance,
-                )
-                if account is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Account not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("update_account", {
+                    "id": payload["id"],
+                    "owner_name": payload.get("owner_name"), "balance": payload.get("balance"),
+                })
             elif op == "delete":
-                account = crud_accounts.delete_account(session, payload["id"])
-                if account is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Account not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("delete_account", {"id": payload["id"]})
             else:
                 return AgentResponse(
                     agent=self.agent_type, success=False, message=f"Unknown operation: {op}",
                     error="unknown_operation",
                 )
-
-            session.commit()
-            return AgentResponse(
-                agent=self.agent_type, success=True, message=f"Account {op} succeeded",
-                data={"id": account.id, "owner_name": account.owner_name, "balance": float(account.balance)},
-            )
         except KeyError as e:
             return AgentResponse(
                 agent=self.agent_type, success=False, message=f"Missing required field: {e}",
                 error="missing_field",
             )
-        finally:
-            session.close()
+        except NotFoundError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="not_found",
+            )
+        except ValidationError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="validation_error",
+            )
+
+        return AgentResponse(
+            agent=self.agent_type, success=True, message=f"Account {op} succeeded", data=data,
+        )
 
 
 class TransactionAgent(Agent):
     agent_type = AgentType.TRANSACTION
 
     def handle(self, request: AgentRequest) -> AgentResponse:
-        import crud_transactions
-
-        session = SessionLocal()
         payload = request.payload or {}
         try:
-            try:
-                op = _operation(request.intent)
-            except ValueError as e:
-                return AgentResponse(
-                    agent=self.agent_type, success=False, message=str(e),
-                    error="invalid_intent",
-                )
+            op = _operation(request.intent)
+        except ValueError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e),
+                error="invalid_intent",
+            )
 
+        try:
             if op == "create":
-                try:
-                    txn = crud_transactions.create_transaction_and_update_balance(
-                        session, payload["account_id"], payload["amount"], payload.get("description")
-                    )
-                except NotFoundError:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Account not found",
-                        error="not_found",
-                    )
-                except InsufficientFundsError as e:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message=str(e),
-                        error="insufficient_funds",
-                    )
-                except ValidationError as e:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message=str(e),
-                        error="validation_error",
-                    )
+                data = self.mcp_client.call_tool("create_transaction", {
+                    "account_id": payload["account_id"], "amount": payload["amount"],
+                    "description": payload.get("description"),
+                })
             elif op == "read":
-                txn = crud_transactions.get_transaction(session, payload["id"])
-                if txn is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Transaction not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("get_transaction", {"id": payload["id"]})
             elif op == "list":
-                txns = crud_transactions.get_transactions_for_account(session, payload["account_id"])
+                transactions = self.mcp_client.call_tool("list_transactions", {
+                    "account_id": payload["account_id"],
+                })
                 return AgentResponse(
                     agent=self.agent_type, success=True, message="Transactions listed",
-                    data={"transactions": [
-                        {"id": t.id, "account_id": t.account_id, "amount": float(t.amount), "description": t.description}
-                        for t in txns
-                    ]},
+                    data={"transactions": transactions},
                 )
             elif op == "update":
-                txn = crud_transactions.update_transaction(
-                    session, payload["id"],
-                    amount=payload.get("amount"), description=payload.get("description"),
-                )
-                if txn is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Transaction not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("update_transaction", {
+                    "id": payload["id"],
+                    "amount": payload.get("amount"), "description": payload.get("description"),
+                })
             elif op == "delete":
-                txn = crud_transactions.delete_transaction(session, payload["id"])
-                if txn is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Transaction not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("delete_transaction", {"id": payload["id"]})
             else:
                 return AgentResponse(
                     agent=self.agent_type, success=False, message=f"Unknown operation: {op}",
                     error="unknown_operation",
                 )
-
-            session.commit()
-            return AgentResponse(
-                agent=self.agent_type, success=True, message=f"Transaction {op} succeeded",
-                data={"id": txn.id, "account_id": txn.account_id, "amount": float(txn.amount), "description": txn.description},
-            )
         except KeyError as e:
             return AgentResponse(
                 agent=self.agent_type, success=False, message=f"Missing required field: {e}",
                 error="missing_field",
             )
-        finally:
-            session.close()
+        except NotFoundError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="not_found",
+            )
+        except InsufficientFundsError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="insufficient_funds",
+            )
+        except ValidationError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="validation_error",
+            )
 
-
-_ALLOWED_STATUS_TRANSITIONS = {
-    "pending": {"approved", "rejected"},
-    "approved": {"completed"},
-    "rejected": set(),   # terminal
-    "completed": set(),  # terminal
-}
-
-_ALLOWED_REQUEST_TYPES = {"change_of_address", "cheque_book_request", "kyc_update"}
+        return AgentResponse(
+            agent=self.agent_type, success=True, message=f"Transaction {op} succeeded", data=data,
+        )
 
 
 class ServiceAgent(Agent):
     agent_type = AgentType.SERVICE
 
     def handle(self, request: AgentRequest) -> AgentResponse:
-        import crud_service
-
-        session = SessionLocal()
         payload = request.payload or {}
         try:
-            try:
-                op = _operation(request.intent)
-            except ValueError as e:
-                return AgentResponse(
-                    agent=self.agent_type, success=False, message=str(e),
-                    error="invalid_intent",
-                )
+            op = _operation(request.intent)
+        except ValueError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e),
+                error="invalid_intent",
+            )
 
+        try:
             if op == "create":
-                request_type = payload["request_type"]
-                if request_type not in _ALLOWED_REQUEST_TYPES:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False,
-                        message=f"'{request_type}' is not a valid request_type",
-                        error="validation_error",
-                    )
-                req = crud_service.create_service_request(
-                    session, payload["account_id"], request_type, payload.get("details")
-                )
+                data = self.mcp_client.call_tool("create_service_request", {
+                    "account_id": payload["account_id"], "request_type": payload["request_type"],
+                    "details": payload.get("details"),
+                })
             elif op == "read":
-                req = crud_service.get_service_request(session, payload["id"])
-                if req is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Service request not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("get_service_request", {"id": payload["id"]})
             elif op == "update":
-                requested_status = payload.get("status")
-
-                if requested_status is not None:
-                    current = crud_service.get_service_request(session, payload["id"])
-                    if current is None:
-                        return AgentResponse(
-                            agent=self.agent_type, success=False, message="Service request not found",
-                            error="not_found",
-                        )
-                    if requested_status not in _ALLOWED_STATUS_TRANSITIONS:
-                        return AgentResponse(
-                            agent=self.agent_type, success=False,
-                            message=f"'{requested_status}' is not a valid status",
-                            error="validation_error",
-                        )
-                    allowed_next = _ALLOWED_STATUS_TRANSITIONS[current.status]
-                    if requested_status not in allowed_next:
-                        return AgentResponse(
-                            agent=self.agent_type, success=False,
-                            message=f"Cannot transition from '{current.status}' to '{requested_status}'",
-                            error="invalid_status_transition",
-                        )
-
-                req = crud_service.update_service_request(
-                    session, payload["id"],
-                    status=requested_status, details=payload.get("details"),
-                )
-                if req is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Service request not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("update_service_request", {
+                    "id": payload["id"],
+                    "status": payload.get("status"), "details": payload.get("details"),
+                })
             elif op == "delete":
-                req = crud_service.delete_service_request(session, payload["id"])
-                if req is None:
-                    return AgentResponse(
-                        agent=self.agent_type, success=False, message="Service request not found",
-                        error="not_found",
-                    )
+                data = self.mcp_client.call_tool("delete_service_request", {"id": payload["id"]})
             else:
                 return AgentResponse(
                     agent=self.agent_type, success=False, message=f"Unknown operation: {op}",
                     error="unknown_operation",
                 )
-
-            session.commit()
-            return AgentResponse(
-                agent=self.agent_type, success=True, message=f"Service request {op} succeeded",
-                data={"id": req.id, "account_id": req.account_id, "request_type": req.request_type, "status": req.status, "details": req.details},
-            )
         except KeyError as e:
             return AgentResponse(
                 agent=self.agent_type, success=False, message=f"Missing required field: {e}",
                 error="missing_field",
             )
-        finally:
-            session.close()
+        except NotFoundError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="not_found",
+            )
+        except InvalidStatusTransitionError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e),
+                error="invalid_status_transition",
+            )
+        except ValidationError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=str(e), error="validation_error",
+            )
+
+        return AgentResponse(
+            agent=self.agent_type, success=True, message=f"Service request {op} succeeded", data=data,
+        )
