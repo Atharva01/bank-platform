@@ -4,6 +4,7 @@ from enum import Enum
 from pydantic import BaseModel
 
 from database import SessionLocal
+from exceptions import InsufficientFundsError, NotFoundError, ValidationError
 
 class AgentType(str, Enum):
     ACCOUNTS = 'accounts'
@@ -133,9 +134,25 @@ class TransactionAgent(Agent):
                 )
 
             if op == "create":
-                txn = crud_transactions.create_transaction(
-                    session, payload["account_id"], payload["amount"], payload.get("description")
-                )
+                try:
+                    txn = crud_transactions.create_transaction_and_update_balance(
+                        session, payload["account_id"], payload["amount"], payload.get("description")
+                    )
+                except NotFoundError:
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message="Account not found",
+                        error="not_found",
+                    )
+                except InsufficientFundsError as e:
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message=str(e),
+                        error="insufficient_funds",
+                    )
+                except ValidationError as e:
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message=str(e),
+                        error="validation_error",
+                    )
             elif op == "read":
                 txn = crud_transactions.get_transaction(session, payload["id"])
                 if txn is None:
