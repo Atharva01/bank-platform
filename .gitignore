@@ -14,3 +14,6 @@ wheels/
 *.jpg
 *.jpeg
 *.txt
+
+# Environment variables and secrets
+.env 
