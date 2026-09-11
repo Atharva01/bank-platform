@@ -51,6 +51,14 @@ def _operation(intent: str | None) -> str:
     return op
 
 
+def _invalid_owner_name(owner_name) -> bool:
+    return not isinstance(owner_name, str) or not owner_name.strip()
+
+
+def _invalid_balance(balance) -> bool:
+    return not isinstance(balance, (int, float)) or isinstance(balance, bool) or balance < 0
+
+
 class AccountsAgent(Agent):
     agent_type = AgentType.ACCOUNTS
 
@@ -69,9 +77,19 @@ class AccountsAgent(Agent):
                 )
 
             if op == "create":
-                account = crud_accounts.create_account(
-                    session, payload["owner_name"], payload.get("balance", 0)
-                )
+                owner_name = payload["owner_name"]
+                balance = payload.get("balance", 0)
+                if _invalid_owner_name(owner_name):
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message="owner_name must be a non-empty string",
+                        error="validation_error",
+                    )
+                if _invalid_balance(balance):
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message="balance must not be negative",
+                        error="validation_error",
+                    )
+                account = crud_accounts.create_account(session, owner_name, balance)
             elif op == "read":
                 account = crud_accounts.get_account(session, payload["id"])
                 if account is None:
@@ -80,9 +98,20 @@ class AccountsAgent(Agent):
                         error="not_found",
                     )
             elif op == "update":
+                owner_name = payload.get("owner_name")
+                balance = payload.get("balance")
+                if owner_name is not None and _invalid_owner_name(owner_name):
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message="owner_name must be a non-empty string",
+                        error="validation_error",
+                    )
+                if balance is not None and _invalid_balance(balance):
+                    return AgentResponse(
+                        agent=self.agent_type, success=False, message="balance must not be negative",
+                        error="validation_error",
+                    )
                 account = crud_accounts.update_account(
-                    session, payload["id"],
-                    owner_name=payload.get("owner_name"), balance=payload.get("balance"),
+                    session, payload["id"], owner_name=owner_name, balance=balance,
                 )
                 if account is None:
                     return AgentResponse(
@@ -213,6 +242,8 @@ _ALLOWED_STATUS_TRANSITIONS = {
     "completed": set(),  # terminal
 }
 
+_ALLOWED_REQUEST_TYPES = {"change_of_address", "cheque_book_request", "kyc_update"}
+
 
 class ServiceAgent(Agent):
     agent_type = AgentType.SERVICE
@@ -232,8 +263,15 @@ class ServiceAgent(Agent):
                 )
 
             if op == "create":
+                request_type = payload["request_type"]
+                if request_type not in _ALLOWED_REQUEST_TYPES:
+                    return AgentResponse(
+                        agent=self.agent_type, success=False,
+                        message=f"'{request_type}' is not a valid request_type",
+                        error="validation_error",
+                    )
                 req = crud_service.create_service_request(
-                    session, payload["account_id"], payload["request_type"], payload.get("details")
+                    session, payload["account_id"], request_type, payload.get("details")
                 )
             elif op == "read":
                 req = crud_service.get_service_request(session, payload["id"])
