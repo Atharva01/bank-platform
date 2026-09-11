@@ -9,7 +9,7 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 |---|-------|--------|---------|-----------|-------|
 | 0 | Contracts & Interfaces | Done | 2026-09-11 | 2026-09-11 | `AgentType`/`AgentRequest`/`AgentResponse`/`Agent` ABC in `agents.py`. `interfaces.py`'s `MCPClient`/`SessionStore` stubs written but not yet wired in |
 | 1 | Agent Business Logic | Done | 2026-09-11 | 2026-09-11 | Real business logic added: atomic balance-linked transactions with overdraft protection, service request status state machine, input validation on account/service creation. Decimal used for money math. 32 pytest tests passing. See Change Log for the full plan that was implemented |
-| 2 | MCP Servers | Not Started | | | Retrofit: wrap `crud_accounts`/`crud_transactions`/`crud_service` behind the `MCPClient` interface so agents stop touching Postgres directly. Each MCP server treated as a domain-owning microservice (own DB access, own process boundary eventually), not middleware — agents never see a DB session once retrofitted. Transport: start in-process (no real MCP protocol yet); if/when a real network boundary is needed, standard MCP transports (`stdio`, Streamable HTTP) preferred over non-standard WebSocket |
+| 2 | MCP Servers | Done | 2026-09-11 | 2026-09-11 | `accounts_server.py`/`transactions_server.py`/`service_server.py` now own their data + invariants (validation, atomicity, status state machine — moved out of `agents.py`). `InProcessMCPClient` in `interfaces.py` dispatches `call_tool(name, params)`. Agents no longer touch Postgres/SessionLocal at all. Also closed a gap: transaction update/delete now atomically re-adjust Account.balance. 36 pytest tests passing, verified over real HTTP. Transport is in-process (no subprocess/real MCP protocol) — deliberate, see Change Log |
 | 3 | LLM Integration | Not Started | | | Self-Hosted + Third-party LLM behind a switchable interface |
 | 4 | Session Store | Not Started | | | Conversation history + inter-agent shared state |
 | 5 | PII Redaction | Not Started | | | Redaction between agents and LLM layer |
@@ -21,26 +21,7 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
 ## Current Focus
 
-**Phase 2 — MCP Servers.** Plan agreed, not yet implemented.
-
-**Ownership principle (refined from the earlier "business rules live in the agent" framing):**
-MCP servers own all invariants about their own data — atomicity, valid values,
-valid state transitions — the same way any real microservice validates at its
-own boundary rather than trusting the caller. Agents shrink to: parse intent →
-translate `payload` into tool-call arguments → call `MCPClient` → map the
-tool's result/exception to an `AgentResponse`. Concretely, this moves the
-input validation and the service status state machine (both currently in
-`agents.py`) into the MCP servers.
-
-| Server | Owns | Tools / business logic inside |
-|---|---|---|
-| Accounts server | `Account` table | `create_account`/`update_account` validate `owner_name`/`balance` (moved from `AccountsAgent`); `get_account`, `delete_account` |
-| Transactions server | `Transaction` table + `Account.balance` | `create_transaction` keeps the atomic overdraft-protected write; **`update_transaction`/`delete_transaction` now also atomically re-adjust `Account.balance`** (reverse the old amount's effect, apply the new one) — closes the previously-flagged gap where editing/deleting a transaction left balance stale; `get_transaction`, `list_transactions` |
-| Service server | `ServiceRequest` table | `create_service_request` validates `request_type` (moved from `ServiceAgent`); `update_service_request` enforces the status state machine (moved from `ServiceAgent`); `get_service_request`, `delete_service_request` |
-
-**Transport:** in-process for now (no real MCP protocol/process boundary yet), one DB session per tool call, never shared across two tool calls — matches how a real network-separated MCP call would behave, and is why the service-status check becomes a read-then-decide pattern across two tool calls instead of one shared transaction.
-
-**Implementation shape:** three server modules (`accounts_server.py`, `transactions_server.py`, `service_server.py`) wrapping the existing `crud_*` functions plus the validation/state-machine logic pulled out of `agents.py`; a concrete `MCPClient` implementation in `interfaces.py` dispatching `call_tool(domain, tool_name, params)` to the right server; `agents.py` rewritten to call the client instead of importing `crud_*`/`SessionLocal` directly.
+**Phase 3 — LLM Integration.** Not started. Phase 2 (MCP Servers) is complete — see row above for what shipped.
 
 ## Change Log
 
@@ -51,3 +32,5 @@ input validation and the service status state machine (both currently in
 - 2026-09-11 — Discussed MCP server design ahead of Phase 2: each MCP server is a domain-owning microservice (not middleware) that will own its own DB access once retrofitted. Agreed each logical write should be one composite crud_* function (e.g. `create_transaction_and_update_balance`), not multiple functions orchestrated by the agent, so it maps cleanly onto a single future MCP tool call and stays atomic. Transport: in-process first; real MCP later via stdio/Streamable HTTP, not WebSocket.
 - 2026-09-11 — Implemented step 2 (atomic balance-linked transaction writes with overdraft protection, Decimal math), step 3 (service status state machine), and step 4 (input validation on account/service creation). Phase 1 marked Done. 32 pytest tests passing. Phase 2 (MCP Servers) is now current focus.
 - 2026-09-11 — Planned Phase 2 in detail. Refined the ownership principle: MCP servers own their own data invariants (validation + atomicity + state transitions) rather than trusting the caller, so input validation and the status state machine move from `agents.py` into the MCP servers. Also decided transaction.update/delete will atomically re-adjust Account.balance once the Transactions server formally owns that invariant, closing a previously-flagged gap.
+- 2026-09-11 — Considered adopting the real `mcp` SDK (FastMCP, stdio/in-memory transport) instead of hand-rolling. Decided against it for now: the SDK is async-only, which would ripple through agents/coordinator/endpoint/tests, plus subprocess management adds real complexity (and Windows-specific risk for stdio) for zero functional gain while the only caller is our own Coordinator in the same process. The `MCPClient` interface is the seam that keeps this swappable later without touching agent code, once an external caller actually exists — deferred, not rejected.
+- 2026-09-11 — Implemented Phase 2: three MCP server modules now own their domain's data and invariants; `InProcessMCPClient` dispatches tool calls; agents.py no longer touches Postgres/SessionLocal at all. Closed the transaction-edit/delete balance-staleness gap in the same pass. 36 tests passing, verified over real HTTP. Phase 2 marked Done.
