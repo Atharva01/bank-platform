@@ -105,6 +105,11 @@ class AccountsAgent(Agent):
                 agent=self.agent_type, success=True, message=f"Account {op} succeeded",
                 data={"id": account.id, "owner_name": account.owner_name, "balance": float(account.balance)},
             )
+        except KeyError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=f"Missing required field: {e}",
+                error="missing_field",
+            )
         finally:
             session.close()
 
@@ -173,6 +178,11 @@ class TransactionAgent(Agent):
                 agent=self.agent_type, success=True, message=f"Transaction {op} succeeded",
                 data={"id": txn.id, "account_id": txn.account_id, "amount": float(txn.amount), "description": txn.description},
             )
+        except KeyError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=f"Missing required field: {e}",
+                error="missing_field",
+            )
         finally:
             session.close()
 
@@ -231,6 +241,11 @@ class ServiceAgent(Agent):
             return AgentResponse(
                 agent=self.agent_type, success=True, message=f"Service request {op} succeeded",
                 data={"id": req.id, "account_id": req.account_id, "request_type": req.request_type, "status": req.status, "details": req.details},
+            )
+        except KeyError as e:
+            return AgentResponse(
+                agent=self.agent_type, success=False, message=f"Missing required field: {e}",
+                error="missing_field",
             )
         finally:
             session.close()
