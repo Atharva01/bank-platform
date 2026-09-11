@@ -616,6 +616,53 @@ for both the LLM and DB paths, not just the one that happened to surface
 first - is a meaningfully more resilient system than before this
 investigation started.
 
+## 21. Broad PII tokenization measurably increased tool-call hallucination
+
+**Problem:** Phase 5's first implementation tokenized every PII-adjacent
+field across all three domains (Account.id/owner_name/balance,
+Transaction.id/account_id/amount/description,
+ServiceRequest.id/account_id/details) before it reached the LLM. Live
+verification (open an account, then ask its balance) hallucinated a
+completed action without any real tool call in 2 of 3 attempts - the
+agent just claimed success and echoed the user's own input back, with no
+`create_account` call anywhere in the message trace and nothing written
+to the DB.
+
+**Root cause:** Ruled out pii_guard corrupting the tool schema itself
+(names/descriptions/arg schemas all verified intact after 3 layers of
+decorator wrapping) and ruled out the tokenization mechanism being wrong
+(when a tool call did fire, args were correctly detokenized and the
+result correctly tokenized, confirmed via a real DB write). What's left:
+nearly every field in every tool result becoming a bracketed token
+(`[ACCOUNT_ID_1]`, `[OWNER_NAME_1]`, `[BALANCE_1]` in a single account
+dict) makes the LLM's context look like a template rather than natural
+data - and reasoning over that context reliably enough to both call a
+tool and relay its result appears to be harder for the model than
+reasoning over real values, on top of Muse Spark's own baseline
+reliability (see PROBLEMS.md #18-#20).
+
+**Solution:** Narrowed tokenization scope drastically: only
+`Account.owner_name` - the one field that's unambiguously personal data
+in the traditional sense and rarely needs to be echoed back as a tool
+argument. IDs stay real (an opaque UUID already treated as non-secret
+elsewhere in this app, e.g. in URLs), balances/amounts/free-text fields
+stay real (financial/operational data the assistant functionally needs
+to reason over correctly). Removed `pii_guard` wrapping from
+`transactions_tools.py`/`service_tools.py` entirely - neither domain has
+an equivalent personal-name field, so there was nothing in the narrower
+scope to apply there. Re-verified live with the identical open-account-
+then-check-balance flow: clean success, correct tool calls, correct DB
+write, the one tokenized field round-tripped correctly through the final
+reply.
+
+**Why it mattered:** a redaction layer that degrades the assistant's core
+reliability is a worse tradeoff than the exposure it was meant to
+prevent, especially for a banking app where a silent hallucinated action
+is a much bigger risk than a name reaching a third-party API. Scoping
+down to the one genuinely unambiguous PII field keeps real protection
+where it matters most, without paying that reliability cost across data
+that mostly isn't "personal" in the first place.
+
 ---
 
 ## Template for new entries

@@ -8,6 +8,14 @@ from langchain_core.tools import StructuredTool
 from bank_platform import transactions_server
 from bank_platform.tool_utils import idempotent, tool_safe
 
+# No Phase 5 (PII Redaction) wrapping here, deliberately: nothing in this
+# domain is unambiguously personal data the way Account.owner_name is -
+# account_id/amount/description are identifiers, financial data, or
+# operational free text, and tokenizing them made tool results
+# templated enough to measurably increase tool-call hallucination in live
+# testing (PROBLEMS.md #21). See accounts_tools.py for the narrow scope
+# that IS applied.
+
 TRANSACTIONS_TOOLS = [
     StructuredTool.from_function(
         func=idempotent(tool_safe(transactions_server.create_transaction)), handle_tool_error=True

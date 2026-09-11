@@ -12,7 +12,7 @@ from langchain.agents import create_agent
 from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph_supervisor import create_supervisor
 
-from bank_platform import session_store
+from bank_platform import pii_guard, session_store
 from bank_platform.accounts_tools import ACCOUNTS_TOOLS
 from bank_platform.database import DATABASE_URL
 from bank_platform.llm import llm
@@ -120,12 +120,14 @@ supervisor = create_supervisor(
 
 def _expire_session(session_id: str) -> None:
     """Cleans up everything tied to one session's lifecycle together - the
-    checkpoint thread, the idempotency dedup dict, and the sessions row -
-    so the three never drift out of sync. Shared by both the per-request
-    lazy check (_expire_if_idle) and the periodic sweep (sweep_expired_sessions).
+    checkpoint thread, the idempotency dedup dict, the PII token map
+    (Phase 5), and the sessions row - so none of them drift out of sync.
+    Shared by both the per-request lazy check (_expire_if_idle) and the
+    periodic sweep (sweep_expired_sessions).
     """
     _checkpointer.delete_thread(session_id)
     _completed_calls.pop(session_id, None)
+    pii_guard.forget_thread(session_id)
     session_store.delete(session_id)
 
 
@@ -189,9 +191,17 @@ def _invoke(message: str, session_id: str) -> dict:
     genuinely persists conversation history across separate /chat calls,
     instead of a fresh UUID being generated (and immortalized) on every
     single request.
+
+    The incoming message is sanitized (Phase 5 - PII Redaction) before it
+    enters the graph: any real value the system already knows about from
+    earlier in this thread (e.g. the user pasting back an account ID it
+    gave them) is replaced with its existing token, so it doesn't reach
+    the LLM in raw form. This is a known-value substitution only, not
+    general PII detection - see pii_guard.py's module docstring.
     """
     config = {"configurable": {"thread_id": session_id}}
-    payload = {"messages": [{"role": "user", "content": message}]}
+    sanitized_message = pii_guard.sanitize_incoming(message, session_id)
+    payload = {"messages": [{"role": "user", "content": sanitized_message}]}
     attempts = 3
     for attempt in range(attempts):
         try:
@@ -220,4 +230,9 @@ def run(message: str, session_id: str) -> str:
     prior_state = supervisor.get_state(config)
     prior_count = len(prior_state.values.get("messages", [])) if prior_state.values else 0
     result = _invoke(message, session_id)
-    return _extract_reply(result["messages"][prior_count:])
+    reply = _extract_reply(result["messages"][prior_count:])
+    # Phase 5 (PII Redaction): the LLM only ever reasoned over tokens
+    # (pii_guard.pii_guard wraps every tool), so its reply text may
+    # contain them too (e.g. "your balance on [ACCOUNT_ID_1] is
+    # [BALANCE_1]") - swap back to real values for the actual caller.
+    return pii_guard.detokenize(reply, session_id)
