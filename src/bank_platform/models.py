@@ -31,6 +31,21 @@ class ServiceRequest(Base):
     details: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, default="pending")
 
+class StaffUser(Base):
+    """Real staff/admin identity (Phase 6 - Auth & Authorisation),
+    replacing admin_auth.py's static shared-secret gate. Deliberately
+    minimal - no role field, since there is exactly one elevated action
+    in the app today (deleting an account); a role/permission system
+    would be speculative until a second one exists. Not linked to
+    Account - staff aren't customers, and customer identity is a
+    separate, deferred design (see PROGRESS.md Phase 6 / account-schema-
+    redesign-deferred memory)."""
+    __tablename__ = "staff_users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    username: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    hashed_password: Mapped[str] = mapped_column(String)
+
 class Session(Base):
     """Inter-agent shared state store (Phase 4) - separate from conversation
     history, which lives in the LangGraph checkpointer's own tables. Nothing

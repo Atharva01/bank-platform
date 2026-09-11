@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from bank_platform import accounts_router, service_router, transactions_router
+from bank_platform import accounts_router, auth_router, service_router, transactions_router
 from bank_platform.exceptions import (
     InsufficientFundsError,
     InvalidStatusTransitionError,
@@ -62,6 +62,7 @@ app.add_middleware(
 app.include_router(accounts_router.router)
 app.include_router(transactions_router.router)
 app.include_router(service_router.router)
+app.include_router(auth_router.router)
 
 # Maps the business-layer exception taxonomy (exceptions.py) to real HTTP
 # status codes for the REST endpoints. /chat is intentionally exempt - its

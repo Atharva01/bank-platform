@@ -1,11 +1,12 @@
-import os
+import uuid
 
 import pytest
 from fastapi.testclient import TestClient
 
+from bank_platform.auth import create_access_token, hash_password
 from bank_platform.database import SessionLocal
 from bank_platform.main import app
-from bank_platform.models import Account
+from bank_platform.models import Account, StaffUser
 
 client = TestClient(app)
 
@@ -97,24 +98,33 @@ def test_invalid_status_transition_returns_409(account):
     assert response.json()["error_type"] == "InvalidStatusTransitionError"
 
 
-def test_delete_account_without_admin_key_returns_403(account):
-    response = client.delete(f"/accounts/{account}")
-    assert response.status_code == 403
+# Auth mechanics (login, token validation, unauthorized access) are
+# covered in tests/test_auth.py - this file only needs a valid staff
+# token to exercise the cascade-delete business logic below.
+@pytest.fixture
+def staff_token():
+    username = f"cascade-test-{uuid.uuid4().hex[:8]}"
+    user_id = str(uuid.uuid4())
+    db = SessionLocal()
+    db.add(StaffUser(id=user_id, username=username, hashed_password=hash_password("irrelevant")))
+    db.commit()
+    db.close()
+    yield create_access_token(username)
+    db = SessionLocal()
+    row = db.get(StaffUser, user_id)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    db.close()
 
 
-def test_delete_account_with_wrong_admin_key_returns_403(account):
-    response = client.delete(f"/accounts/{account}", headers={"X-Admin-Key": "not-the-real-key"})
-    assert response.status_code == 403
-
-
-def test_delete_account_cascades_to_transactions_and_service_requests(account):
+def test_delete_account_cascades_to_transactions_and_service_requests(account, staff_token):
     txn_response = client.post(f"/accounts/{account}/transactions", json={"amount": 30})
     transaction_id = txn_response.json()["id"]
     svc_response = client.post(f"/accounts/{account}/service-requests", json={"request_type": "kyc_update"})
     request_id = svc_response.json()["id"]
 
-    admin_key = os.environ["ADMIN_API_KEY"]
-    delete_response = client.delete(f"/accounts/{account}", headers={"X-Admin-Key": admin_key})
+    delete_response = client.delete(f"/accounts/{account}", headers={"Authorization": f"Bearer {staff_token}"})
     assert delete_response.status_code == 200
 
     assert client.get(f"/accounts/{account}").status_code == 404

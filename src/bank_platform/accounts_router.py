@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from bank_platform import accounts_server
-from bank_platform.admin_auth import require_admin
+from bank_platform.auth import get_current_staff_user
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -47,9 +47,8 @@ async def update_account(account_id: str, body: UpdateAccountRequest):
 
 # Deliberately NOT wired into ACCOUNTS_TOOLS (accounts_tools.py) - closing
 # an account is not a customer/agent self-service action. Gated by
-# require_admin (admin_auth.py) - a static shared-secret header check, not
-# real IAM (Phase 6, not started). Good enough to keep this unreachable by
-# an ordinary caller in the meantime; replace when Phase 6 lands.
-@router.delete("/{account_id}", response_model=AccountResponse, dependencies=[Depends(require_admin)])
+# get_current_staff_user (auth.py) - real staff authentication (Phase 6),
+# replacing the earlier static shared-secret stopgap.
+@router.delete("/{account_id}", response_model=AccountResponse, dependencies=[Depends(get_current_staff_user)])
 async def delete_account(account_id: str):
     return accounts_server.delete_account(account_id)
