@@ -425,11 +425,27 @@ read, not an LLM call), and passes only `result["messages"][prior_count:]`
 **Why it mattered:** Caught by testing the actual new capability
 end-to-end (real multi-turn continuity) rather than just unit-testing the
 pieces in isolation — the same lesson as #10 and #14, applied to a
-different symptom. Also honestly incomplete: Groq's daily cap was hit
-again right after finding this, so the fix is reasoned-correct and
-verified by direct state inspection (new-thread edge case, message-count
-slicing logic) but not re-confirmed with another live multi-turn call —
-flagged rather than silently assumed fixed.
+different symptom.
+
+**Follow-up verification:** Groq's daily cap was hit right after finding
+this, blocking another live multi-turn call — but a plausible alternative
+explanation needed ruling out first: a known (as of this writing, unconfirmed
+by maintainers) GitHub issue against `langgraph-checkpoint-postgres`
+reports `PostgresSaver` sometimes failing to load full message history
+from checkpoints, which could produce a similar symptom for a completely
+different, lower-level reason. Two checks, both free of LLM calls, ruled
+that out for this codebase: (1) the original live test's turn-2 reply
+already contained the *exact* correct transaction ID from turn 1 — data
+that could only be present if the full history genuinely reached the
+model, which argues against a persistence-layer failure; (2) directly
+driving `supervisor.update_state()` through four sequential writes on one
+thread and reading back via `get_state()` returned all four messages,
+correctly ordered, with no loss — confirming the real reducer/channel
+path (not a hand-rolled low-level checkpoint write, which turned out to
+need channel-version bookkeeping this test didn't originally provide) is
+sound for this setup. Root cause is confirmed as extraction-layer only;
+not re-tested against a live multi-turn model call, but no longer an open
+question about the persistence layer either.
 
 ---
 
