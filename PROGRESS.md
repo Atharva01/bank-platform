@@ -36,7 +36,7 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
 **Tech stack for this work:** plain Python classes for agents (no LangGraph/CrewAI/AutoGen — not worth the indirection until Phase 3 needs LLM reasoning loops); hand-rolled dict for the service status state machine (4 states, not worth a library like `transitions`); Pydantic continues to own input shape validation, business rules stay as plain `if` checks in each agent.
 
-**Implementation order:** (1) ✅ crud commit refactor → (2) TransactionAgent balance/overdraft logic with Decimal math → (3) ServiceAgent status machine → (4) input validation on creates → (5) tests for all of the above, including new error paths.
+**Implementation order:** (1) ✅ crud commit refactor → (2) ✅ TransactionAgent balance/overdraft logic with Decimal math → (3) ServiceAgent status machine → (4) input validation on creates → (5) tests for all of the above, including new error paths.
 
 Once this lands, Phase 1 moves to `Done` and Phase 2 (MCP Servers) resumes — retrofitting these same `crud_*` functions behind the `MCPClient` interface without changing agent code.
 
