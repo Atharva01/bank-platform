@@ -361,6 +361,43 @@ any real deployment.
 
 ---
 
+## 14. DeepSeek's current Flash model still breaks the supervisor handoff
+
+**Problem:** With Groq's free tier daily token cap exhausted (see #13's
+investigation), DeepSeek was proposed as a fallback provider — specifically
+`deepseek-v4-flash`, on the theory that a newer model generation might not
+have the same "thinking mode" problem that got DeepSeek rejected the first
+time (#10).
+
+**Root cause:** Researched first rather than assuming either way (echoing
+the methodology from #10). `deepseek-v4-flash` turned out to be a retired legacy
+alias — the actual current model is `DeepSeek-V4.1-Flash`, served under the
+model string `deepseek-flash` (the *same* model name rejected in #10). A
+standalone `llm.invoke()` call looked clean: no `reasoning_content` in the
+response, thinking mode evidently off by default. But swapping `llm.py` and
+running one real request through the actual multi-turn supervisor flow
+reproduced the identical failure as #10: `400 - The reasoning_content in
+the thinking mode must be passed back to the API`, triggered by the second
+turn (the supervisor's post-tool-call synthesis step), not the first.
+
+**Solution:** Reverted `llm.py` to Groq (`openai/gpt-oss-20b`) — no net
+change from before this investigation. Confirmed the idempotency guard
+(#13) held up even during the failure: exactly one deposit landed despite
+the error, balance correct.
+
+**Why it mattered:** A standalone call passing is not evidence a model
+works for this architecture — this is the second time that exact gap
+(clean single call, broken multi-turn handoff) has been caught, both times
+only because the real graph was tested, not just one `invoke()`. Total
+cost to get a definitive answer: 2 live API calls, deliberately minimal
+per a standing instruction to avoid iterative/exploratory LLM-endpoint
+calls. DeepSeek Flash is not a viable fallback as things stand; revisit
+only if DeepSeek ships a genuinely non-thinking model variant, or if
+`langchain_openai.ChatOpenAI` gains native `reasoning_content` pass-back
+support.
+
+---
+
 ## Template for new entries
 
 ```
