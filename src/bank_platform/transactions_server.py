@@ -17,7 +17,10 @@ def _serialize(transaction) -> dict:
     }
 
 
-def create_transaction(account_id, amount, description=None) -> dict:
+def create_transaction(account_id: str, amount: float, description: str | None = None) -> dict:
+    """Record a transaction against an account and atomically update its balance.
+    A positive amount is a credit (deposit), a negative amount is a debit
+    (withdrawal/payment). Fails if the debit would take the balance negative."""
     session = SessionLocal()
     try:
         transaction = crud_transactions.create_transaction_and_update_balance(
@@ -29,7 +32,8 @@ def create_transaction(account_id, amount, description=None) -> dict:
         session.close()
 
 
-def get_transaction(id) -> dict:
+def get_transaction(id: str) -> dict:
+    """Look up a single transaction by its id."""
     session = SessionLocal()
     try:
         transaction = crud_transactions.get_transaction(session, id)
@@ -40,7 +44,8 @@ def get_transaction(id) -> dict:
         session.close()
 
 
-def list_transactions(account_id) -> list[dict]:
+def list_transactions(account_id: str) -> list[dict]:
+    """List every transaction recorded against a given account (its statement)."""
     session = SessionLocal()
     try:
         transactions = crud_transactions.get_transactions_for_account(session, account_id)
@@ -49,7 +54,11 @@ def list_transactions(account_id) -> list[dict]:
         session.close()
 
 
-def update_transaction(id, amount=None, description=None) -> dict:
+def update_transaction(id: str, amount: float | None = None, description: str | None = None) -> dict:
+    """Edit an existing transaction's amount and/or description. If the amount
+    changes, the linked account's balance is atomically re-adjusted to
+    reverse the old amount's effect and apply the new one; fails if that
+    would take the balance negative."""
     session = SessionLocal()
     try:
         transaction = crud_transactions.update_transaction_and_adjust_balance(
@@ -61,7 +70,9 @@ def update_transaction(id, amount=None, description=None) -> dict:
         session.close()
 
 
-def delete_transaction(id) -> dict:
+def delete_transaction(id: str) -> dict:
+    """Delete a transaction and atomically reverse its effect on the linked
+    account's balance. Fails if reversing it would take the balance negative."""
     session = SessionLocal()
     try:
         transaction = crud_transactions.delete_transaction_and_adjust_balance(session, id)

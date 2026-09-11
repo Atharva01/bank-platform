@@ -26,7 +26,10 @@ def _serialize(request) -> dict:
     }
 
 
-def create_service_request(account_id, request_type, details=None) -> dict:
+def create_service_request(account_id: str, request_type: str, details: str | None = None) -> dict:
+    """Raise a service request against an account. request_type must be one
+    of: change_of_address, cheque_book_request, kyc_update. Starts in
+    'pending' status."""
     if request_type not in _ALLOWED_REQUEST_TYPES:
         raise ValidationError(f"'{request_type}' is not a valid request_type")
 
@@ -39,7 +42,8 @@ def create_service_request(account_id, request_type, details=None) -> dict:
         session.close()
 
 
-def get_service_request(id) -> dict:
+def get_service_request(id: str) -> dict:
+    """Look up a service request by its id, including its current status."""
     session = SessionLocal()
     try:
         request = crud_service.get_service_request(session, id)
@@ -50,7 +54,11 @@ def get_service_request(id) -> dict:
         session.close()
 
 
-def update_service_request(id, status=None, details=None) -> dict:
+def update_service_request(id: str, status: str | None = None, details: str | None = None) -> dict:
+    """Update a service request's status and/or details. Status must follow
+    the allowed lifecycle: pending -> approved or rejected, approved ->
+    completed. rejected and completed are terminal and cannot be changed
+    further. Omit status to only change details."""
     session = SessionLocal()
     try:
         if status is not None:
@@ -74,7 +82,8 @@ def update_service_request(id, status=None, details=None) -> dict:
         session.close()
 
 
-def delete_service_request(id) -> dict:
+def delete_service_request(id: str) -> dict:
+    """Delete a service request by its id."""
     session = SessionLocal()
     try:
         request = crud_service.delete_service_request(session, id)
