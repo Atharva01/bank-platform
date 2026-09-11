@@ -278,6 +278,87 @@ directly (`AttributeError: 'RunnableRetry' object has no attribute
 surfaced as every sub-agent silently having zero tools, a much more
 confusing failure mode to debug later.
 
+**Update:** This entry's own conclusion — "the safe retry boundary is the
+whole invocation" — turned out to be wrong. See #13: retrying the whole
+invocation from scratch replays any tool call that already succeeded before
+the failure. Superseded by resuming from a checkpoint instead of restarting.
+
+---
+
+## 13. A live demo deposit landed three times — two compounding bugs
+
+**Problem:** A manual demo of `POST /chat` ("Deposit 150 into account X")
+left the account with **three** `Deposit` transactions and a balance of
+$950 instead of $650, from a single HTTP request. No error was visible to
+the caller — the endpoint returned `200 OK` with a generic filler reply
+("Your request has been forwarded to the transaction team.").
+
+**Root cause — two separate, compounding bugs, found by tracing the full
+message history (`create_supervisor(..., output_mode="full_history")`,
+default is `"last_message"` and hides exactly this):**
+
+1. **Retry-restart replayed a committed tool call.** `run()`'s `tenacity`
+   retry (see #12) wrapped `supervisor.invoke(...)` with no
+   checkpointer, so every retry attempt re-ran the graph from scratch —
+   including any tool call that had *already executed and committed* before
+   the failure. `gpt-oss-20b`'s `output_parse_failed` (#12) typically fires
+   on the *next* model call after a tool result (e.g. synthesizing the
+   final reply), by which point the deposit was already in Postgres —
+   so each retry silently deposited again.
+2. **The supervisor itself sometimes re-delegates a completed request.**
+   Independent of any error: tracing showed the supervisor occasionally
+   hands off to `transaction_agent` a *second* time after already
+   receiving a successful handback, and the sub-agent — with no memory
+   that this exact deposit was already reported as done a moment earlier
+   in the same conversation — just does it again. Measured at roughly 1/10
+   requests double-delegating in a clean (error-free) run.
+
+Both bugs independently produce a duplicate deposit; the demo happened to
+trigger both in the same request, which is how a single `200 OK` response
+produced three transactions instead of one.
+
+**Solution — three changes, each addressing a distinct layer of the
+problem:**
+
+1. **Resume instead of restart.** `graph.py` now compiles the supervisor
+   with a `langgraph.checkpoint.memory.InMemorySaver()` checkpointer and a
+   fresh `thread_id` per `run()` call. On a retryable failure, subsequent
+   attempts invoke with `input=None` against the same `thread_id` config —
+   LangGraph resumes from its last completed checkpoint instead of
+   re-entering the graph from the initial message, so an already-executed
+   tool call is never replayed by a retry.
+2. **Tightened both the supervisor's and `transaction_agent`'s system
+   prompts** to explicitly forbid re-delegating/re-acting on an
+   already-completed request. Measured effect: double-delegation dropped
+   from ~1/10 to 0/20 trials. A prompt is not a guarantee, though — hence
+   (3).
+3. **Deterministic idempotency guard at the tool boundary**
+   (`tool_utils.idempotent`, applied to `create_account`,
+   `create_transaction`, and `create_service_request` — the only
+   operations that insert a new row and are therefore actually unsafe to
+   repeat; `update`/`delete` in this codebase are already naturally
+   idempotent). Each call is deduped by `(tool name, args)` per
+   conversation `thread_id`, using `RunnableConfig` injection (a
+   parameter type-hinted `RunnableConfig` is auto-populated by LangChain
+   at call time and excluded from the LLM-visible tool schema — verified
+   directly, no LLM call needed: `args_schema` still only exposes the
+   real business parameters). A repeated call within the same thread is
+   rejected with a `ToolException` instead of executing — this holds
+   regardless of *why* the LLM tried to call it twice, so it isn't
+   dependent on the model reliably following the prompt in (2).
+
+**Why it mattered:** (1) and (2) are real fixes but both are ultimately
+"make the LLM less likely to misbehave" — neither *guarantees* a mutating
+call runs exactly once, which matters for something that moves real money.
+(3) is the layer that actually guarantees it, verified by invoking the tool
+directly with a duplicate `(args, thread_id)` pair (bypassing the LLM
+entirely, at zero API cost) and confirming the second call is rejected
+while a same-args call under a *different* thread_id still executes
+normally. Also worth noting: the process-local dedup dict and the
+in-memory checkpointer both grow unbounded for the life of the process —
+acceptable for a single-process prototype, flagged as a follow-up before
+any real deployment.
+
 ---
 
 ## Template for new entries

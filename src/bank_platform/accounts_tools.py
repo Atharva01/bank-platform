@@ -6,10 +6,12 @@ stays framework-agnostic, unchanged.
 from langchain_core.tools import StructuredTool
 
 from bank_platform import accounts_server
-from bank_platform.tool_utils import tool_safe
+from bank_platform.tool_utils import idempotent, tool_safe
 
 ACCOUNTS_TOOLS = [
-    StructuredTool.from_function(func=tool_safe(accounts_server.create_account), handle_tool_error=True),
+    StructuredTool.from_function(
+        func=idempotent(tool_safe(accounts_server.create_account)), handle_tool_error=True
+    ),
     StructuredTool.from_function(func=tool_safe(accounts_server.get_account), handle_tool_error=True),
     StructuredTool.from_function(func=tool_safe(accounts_server.update_account), handle_tool_error=True),
     StructuredTool.from_function(func=tool_safe(accounts_server.delete_account), handle_tool_error=True),
