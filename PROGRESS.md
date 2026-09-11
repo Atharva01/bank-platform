@@ -6,9 +6,9 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
 | # | Phase | Status | Started | Completed | Notes |
 |---|-------|--------|---------|-----------|-------|
-| 0 | Contracts & Interfaces | Not Started | | | Shared agent message schema, `Agent` base interface, stub MCP/session interfaces |
-| 1 | Agent Business Logic | Not Started | | | Coordinator (LLM-routed) + Accounts/Transaction/Service Agents, built against Phase 0 stubs |
-| 2 | MCP Servers | Not Started | | | Accounts, Transactions, Service MCP servers with real tool implementations |
+| 0 | Contracts & Interfaces | Done | 2026-09-11 | 2026-09-11 | `AgentType`/`AgentRequest`/`AgentResponse`/`Agent` ABC in `agents.py`. `interfaces.py`'s `MCPClient`/`SessionStore` stubs written but not yet wired in |
+| 1 | Agent Business Logic | Done | 2026-09-11 | 2026-09-11 | Rule-based Coordinator + Accounts/Transaction/Service Agents, full CRUD, 11 pytest tests passing. Built straight against Postgres instead of Phase 0 stubs — agents currently call `crud_*` directly, not through `MCPClient` |
+| 2 | MCP Servers | Not Started | | | Retrofit: wrap existing `crud_accounts`/`crud_transactions`/`crud_service` behind the `MCPClient` interface so agents stop touching Postgres directly. Transport (real MCP protocol vs. in-process MCP-shaped interface) undecided |
 | 3 | LLM Integration | Not Started | | | Self-Hosted + Third-party LLM behind a switchable interface |
 | 4 | Session Store | Not Started | | | Conversation history + inter-agent shared state |
 | 5 | PII Redaction | Not Started | | | Redaction between agents and LLM layer |
@@ -20,8 +20,9 @@ Status legend: `Not Started` | `In Progress` | `Blocked` | `Done`
 
 ## Current Focus
 
-**Phase 0 → Phase 1** — defining the shared agent contract, then building the Coordinator and three domain agents against stubs.
+**Phase 2 — MCP Servers.** Decision pending: real MCP protocol (stdio/SDK, 3 separate processes) vs. an in-process MCP-shaped `MCPClient` implementation that can be swapped for the real protocol later without touching agent code.
 
 ## Change Log
 
 - 2026-09-11 — Ledger created. Phase plan agreed; Python stack, LLM-based Coordinator routing decided.
+- 2026-09-11 — Phases 0 and 1 built in a CRUD-first detour (agents talk directly to Postgres, bypassing the MCP abstraction) to prove out agent coordination end-to-end before returning to the phased plan. Marked Done retroactively. Phase 2 is now the gap between current state and the original architecture diagram.
