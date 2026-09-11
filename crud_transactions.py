@@ -9,7 +9,7 @@ def create_transaction(
 ):
     transaction = Transaction(account_id=account_id, amount=amount, description=description)
     session.add(transaction)
-    session.commit()
+    session.flush()
     return transaction
 
 
@@ -42,7 +42,7 @@ def update_transaction(
             update(Transaction).where(Transaction.id == transaction_id).values(**update_data)
         )
         session.execute(statement)
-        session.commit()
+        session.flush()
 
     return get_transaction(session, transaction_id)
 
@@ -53,6 +53,6 @@ def delete_transaction(session: Session, transaction_id: str):
         return None
 
     session.delete(transaction)
-    session.commit()
+    session.flush()
 
     return transaction

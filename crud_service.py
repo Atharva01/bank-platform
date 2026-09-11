@@ -11,7 +11,7 @@ def create_service_request(
         account_id=account_id, request_type=request_type, details=details
     )
     session.add(service_request)
-    session.commit()
+    session.flush()
     return service_request
 
 
@@ -38,7 +38,7 @@ def update_service_request(
             update(ServiceRequest).where(ServiceRequest.id == request_id).values(**update_data)
         )
         session.execute(statement)
-        session.commit()
+        session.flush()
 
     return get_service_request(session, request_id)
 
@@ -49,6 +49,6 @@ def delete_service_request(session: Session, request_id: str):
         return None
 
     session.delete(service_request)
-    session.commit()
+    session.flush()
 
     return service_request

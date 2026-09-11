@@ -101,6 +101,7 @@ class AccountsAgent(Agent):
                     error="unknown_operation",
                 )
 
+            session.commit()
             return AgentResponse(
                 agent=self.agent_type, success=True, message=f"Account {op} succeeded",
                 data={"id": account.id, "owner_name": account.owner_name, "balance": float(account.balance)},
@@ -174,6 +175,7 @@ class TransactionAgent(Agent):
                     error="unknown_operation",
                 )
 
+            session.commit()
             return AgentResponse(
                 agent=self.agent_type, success=True, message=f"Transaction {op} succeeded",
                 data={"id": txn.id, "account_id": txn.account_id, "amount": float(txn.amount), "description": txn.description},
@@ -238,6 +240,7 @@ class ServiceAgent(Agent):
                     error="unknown_operation",
                 )
 
+            session.commit()
             return AgentResponse(
                 agent=self.agent_type, success=True, message=f"Service request {op} succeeded",
                 data={"id": req.id, "account_id": req.account_id, "request_type": req.request_type, "status": req.status, "details": req.details},

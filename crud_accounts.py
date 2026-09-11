@@ -7,7 +7,7 @@ from models import Account
 def create_account(session: Session, owner_name: str, balance: float = 0):
     account = Account(owner_name=owner_name, balance=balance)
     session.add(account)
-    session.commit()
+    session.flush()
     return account
 
 
@@ -32,7 +32,7 @@ def update_account(
     if update_data:
         statement = update(Account).where(Account.id == account_id).values(**update_data)
         session.execute(statement)
-        session.commit()
+        session.flush()
 
     return get_account(session, account_id)
 
@@ -43,6 +43,6 @@ def delete_account(session: Session, account_id: str):
         return None
 
     session.delete(account)
-    session.commit()
+    session.flush()
 
     return account
