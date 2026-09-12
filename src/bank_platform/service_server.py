@@ -42,6 +42,17 @@ def create_service_request(account_id: str, request_type: str, details: str | No
         session.close()
 
 
+def get_service_request_account_id(id: str) -> str | None:
+    """Resolves a service request's account_id - used by authz.py to check
+    ownership before acting on a request referenced by its own id."""
+    session = SessionLocal()
+    try:
+        request = crud_service.get_service_request(session, id)
+        return request.account_id if request is not None else None
+    finally:
+        session.close()
+
+
 def get_service_request(id: str) -> dict:
     """Look up a service request by its id, including its current status."""
     session = SessionLocal()

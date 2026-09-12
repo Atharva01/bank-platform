@@ -3,9 +3,9 @@
 the architecture diagram. Separate from conversation history, which lives
 in the LangGraph checkpointer's own tables (see graph.py).
 
-Not currently wired into any agent - the store exists and is correct,
-ready for a real consumer, since none of the 3 current agents need
-cross-agent shared data yet.
+First real consumer: graph.py's session/customer binding check (added at
+explicit user direction - see account-schema-redesign-deferred memory's
+2026-09-12 update), via the module-level `store` instance below.
 """
 
 from datetime import datetime, timezone
@@ -44,6 +44,9 @@ class PostgresSessionStore(SessionStore):
             db.commit()
         finally:
             db.close()
+
+
+store = PostgresSessionStore()
 
 
 def touch(session_id: str) -> None:

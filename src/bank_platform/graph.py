@@ -15,6 +15,7 @@ from langgraph_supervisor import create_supervisor
 from bank_platform import pii_guard, session_store
 from bank_platform.accounts_tools import ACCOUNTS_TOOLS
 from bank_platform.database import DATABASE_URL
+from bank_platform.exceptions import SessionOwnershipError
 from bank_platform.llm import llm
 from bank_platform.service_tools import SERVICE_TOOLS
 from bank_platform.tool_utils import _completed_calls
@@ -37,7 +38,11 @@ ACCOUNTS_AGENT_PROMPT = (
     "viewing an account's details/balance, and updating its owner "
     "name or balance. You cannot close an account - that requires "
     "staff/elevated access. If asked to close an account, say so "
-    "plainly and do not attempt it with any other tool. Use your "
+    "plainly and do not attempt it with any other tool. The caller is "
+    "always an authenticated customer - if they ask about 'my "
+    "account'/'my balance' without stating an account id, call "
+    "list_accounts first to find their own account(s) rather than "
+    "asking them for an id they may not have memorized. Use your "
     "tools to fulfil the user's request, then report back what "
     "happened in plain language."
 )
@@ -176,7 +181,21 @@ def _extract_reply(messages) -> str:
     return "I couldn't process that request."
 
 
-def _invoke(message: str, session_id: str) -> dict:
+def _bind_or_verify_customer(session_id: str, customer_id: str) -> None:
+    """session_id is still a client-chosen opaque string with no identity
+    of its own - without this, two different authenticated customers could
+    collide on the same session_id and share one thread's conversation
+    history/state. Binds the first customer to use a thread; rejects any
+    other customer trying to reuse it later. Uses session_store.py's
+    shared-state (Phase 4, previously unconsumed) rather than a new store."""
+    bound_customer_id = session_store.store.get(session_id).get("customer_id")
+    if bound_customer_id is None:
+        session_store.store.update(session_id, {"customer_id": customer_id})
+    elif bound_customer_id != customer_id:
+        raise SessionOwnershipError(f"session_id {session_id!r} is already in use by a different customer")
+
+
+def _invoke(message: str, session_id: str, customer_id: str) -> dict:
     """Runs the graph, resuming from its last checkpoint on a retryable LLM
     failure (a malformed tool-call response the provider's own API rejects,
     e.g. PROBLEMS.md #12/#19, or a request that timed out - see llm.py's
@@ -199,7 +218,7 @@ def _invoke(message: str, session_id: str) -> dict:
     the LLM in raw form. This is a known-value substitution only, not
     general PII detection - see pii_guard.py's module docstring.
     """
-    config = {"configurable": {"thread_id": session_id}}
+    config = {"configurable": {"thread_id": session_id, "customer_id": customer_id}}
     sanitized_message = pii_guard.sanitize_incoming(message, session_id)
     payload = {"messages": [{"role": "user", "content": sanitized_message}]}
     attempts = 3
@@ -212,7 +231,7 @@ def _invoke(message: str, session_id: str) -> dict:
             payload = None  # resume from checkpoint, don't replay from scratch
 
 
-def run(message: str, session_id: str) -> str:
+def run(message: str, session_id: str, customer_id: str) -> str:
     """Runs one user message through the supervisor graph, within the given
     session's conversation, and returns the final natural-language reply.
 
@@ -225,11 +244,12 @@ def run(message: str, session_id: str) -> str:
     instead of surfacing that something went wrong.
     """
     _expire_if_idle(session_id)
+    _bind_or_verify_customer(session_id, customer_id)
     session_store.touch(session_id)
     config = {"configurable": {"thread_id": session_id}}
     prior_state = supervisor.get_state(config)
     prior_count = len(prior_state.values.get("messages", [])) if prior_state.values else 0
-    result = _invoke(message, session_id)
+    result = _invoke(message, session_id, customer_id)
     reply = _extract_reply(result["messages"][prior_count:])
     # Phase 5 (PII Redaction): the LLM only ever reasoned over tokens
     # (pii_guard.pii_guard wraps every tool), so its reply text may

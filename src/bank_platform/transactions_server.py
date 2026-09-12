@@ -32,6 +32,17 @@ def create_transaction(account_id: str, amount: float, description: str | None =
         session.close()
 
 
+def get_transaction_account_id(id: str) -> str | None:
+    """Resolves a transaction's account_id - used by authz.py to check
+    ownership before acting on a transaction referenced by its own id."""
+    session = SessionLocal()
+    try:
+        transaction = crud_transactions.get_transaction(session, id)
+        return transaction.account_id if transaction is not None else None
+    finally:
+        session.close()
+
+
 def get_transaction(id: str) -> dict:
     """Look up a single transaction by its id."""
     session = SessionLocal()

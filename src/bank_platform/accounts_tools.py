@@ -3,9 +3,12 @@ that imports LangChain for the Accounts domain — accounts_server.py itself
 stays framework-agnostic, unchanged.
 """
 
+from pydantic import BaseModel
+
 from langchain_core.tools import StructuredTool
 
 from bank_platform import accounts_server
+from bank_platform.authz import inject_customer_id, owner_guard
 from bank_platform.pii_guard import pii_guard
 from bank_platform.tool_utils import idempotent, tool_safe
 
@@ -21,24 +24,57 @@ from bank_platform.tool_utils import idempotent, tool_safe
 # data in the traditional sense.
 _ACCOUNT_FIELDS = {"owner_name": "OWNER_NAME"}
 
+
+class _CreateAccountArgs(BaseModel):
+    """Explicit args_schema for create_account - see authz.inject_customer_id's
+    docstring for why this can't be left to schema inference: customer_id
+    must never be an LLM-fillable argument."""
+
+    owner_name: str
+    balance: float = 0
+
+
+class _ListAccountsArgs(BaseModel):
+    """Empty on purpose - list_accounts takes no real arguments, only the
+    config-injected customer_id."""
+
+
 ACCOUNTS_TOOLS = [
     StructuredTool.from_function(
-        func=pii_guard(idempotent(tool_safe(accounts_server.create_account)), _ACCOUNT_FIELDS),
+        func=inject_customer_id(
+            pii_guard(idempotent(tool_safe(accounts_server.create_account)), _ACCOUNT_FIELDS)
+        ),
+        args_schema=_CreateAccountArgs,
         handle_tool_error=True,
     ),
     StructuredTool.from_function(
-        func=pii_guard(tool_safe(accounts_server.get_account), _ACCOUNT_FIELDS), handle_tool_error=True
+        func=owner_guard(
+            pii_guard(tool_safe(accounts_server.get_account), _ACCOUNT_FIELDS),
+            resolve_account_id=lambda kwargs: kwargs.get("id"),
+        ),
+        handle_tool_error=True,
     ),
     StructuredTool.from_function(
-        func=pii_guard(tool_safe(accounts_server.update_account), _ACCOUNT_FIELDS), handle_tool_error=True
+        func=owner_guard(
+            pii_guard(tool_safe(accounts_server.update_account), _ACCOUNT_FIELDS),
+            resolve_account_id=lambda kwargs: kwargs.get("id"),
+        ),
+        handle_tool_error=True,
+    ),
+    StructuredTool.from_function(
+        func=inject_customer_id(tool_safe(accounts_server.list_accounts_for_customer)),
+        args_schema=_ListAccountsArgs,
+        handle_tool_error=True,
+        name="list_accounts",
+        description="List every account the authenticated customer owns - use this before asking the "
+        "customer for an account id, e.g. to answer 'what's my balance' or 'what accounts do I have'.",
     ),
     # delete_account is deliberately NOT exposed here - closing an account
     # is not a customer/agent self-service action, it needs elevated
-    # (staff/admin) access that doesn't exist yet (no IAM - see Phase 6).
-    # No "apply for closure" path exists yet either (service_agent's
-    # request_type allowlist has no closure type) - that's a real gap, not
-    # implemented here, flagged for whoever builds the admin/IAM layer.
-    # accounts_server.delete_account itself is untouched and still used by
-    # test cleanup helpers - only its customer/agent-facing exposure is
-    # removed.
+    # (staff/admin) access (see Phase 6). No "apply for closure" path
+    # exists yet either (service_agent's request_type allowlist has no
+    # closure type) - that's a real gap, not implemented here, flagged for
+    # whoever builds the admin/IAM layer. accounts_server.delete_account
+    # itself is untouched and still used by test cleanup helpers - only
+    # its customer/agent-facing exposure is removed.
 ]

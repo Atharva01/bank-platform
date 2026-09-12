@@ -2,19 +2,26 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
-from bank_platform import accounts_router, auth_router, service_router, transactions_router
+from bank_platform import accounts_router, auth_router, customer_router, service_router, transactions_router
+from bank_platform.auth import get_current_customer
 from bank_platform.exceptions import (
     InsufficientFundsError,
     InvalidStatusTransitionError,
     NotFoundError,
+    SessionOwnershipError,
     ValidationError,
 )
 from bank_platform.graph import SESSION_IDLE_TIMEOUT, run, sweep_expired_sessions
+from bank_platform.models import Customer
+from bank_platform.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# Phase 7 - Edge Layer: in-app rate limiting (slowapi). See rate_limit.py
+# for the shared Limiter instance and its in-memory-storage caveat.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
+
 # Dev-permissive for now — no frontend origin decided yet. Tighten
 # allow_origins to specific hosts before any real deployment.
 app.add_middleware(
@@ -63,6 +76,7 @@ app.include_router(accounts_router.router)
 app.include_router(transactions_router.router)
 app.include_router(service_router.router)
 app.include_router(auth_router.router)
+app.include_router(customer_router.router)
 
 # Maps the business-layer exception taxonomy (exceptions.py) to real HTTP
 # status codes for the REST endpoints. /chat is intentionally exempt - its
@@ -75,6 +89,11 @@ _ERROR_STATUS = {
     ValidationError: 400,
     InvalidStatusTransitionError: 409,
     InsufficientFundsError: 422,
+    # Unlike the four above (REST-only, /chat's failures are otherwise
+    # communicated conversationally by the LLM), this one also applies to
+    # /chat: a session_id reused by a different customer is an auth-layer
+    # problem, not something the LLM should try to explain away.
+    SessionOwnershipError: 403,
 }
 
 
@@ -102,6 +121,9 @@ async def home():
 
 
 @app.post("/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    reply = run(request.message, request.session_id)
+@limiter.limit("20/minute")
+async def chat(
+    request: Request, chat_request: ChatRequest, current_customer: Customer = Depends(get_current_customer)
+):
+    reply = run(chat_request.message, chat_request.session_id, current_customer.id)
     return ChatResponse(reply=reply)

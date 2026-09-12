@@ -5,8 +5,8 @@ from sqlalchemy.orm import Session
 from bank_platform.models import Account, ServiceRequest, Transaction
 
 
-def create_account(session: Session, owner_name: str, balance: float = 0):
-    account = Account(owner_name=owner_name, balance=balance)
+def create_account(session: Session, owner_name: str, balance: float = 0, customer_id: str | None = None):
+    account = Account(owner_name=owner_name, balance=balance, customer_id=customer_id)
     session.add(account)
     session.flush()
     return account
@@ -14,6 +14,10 @@ def create_account(session: Session, owner_name: str, balance: float = 0):
 
 def get_account(session: Session, account_id: str):
     return session.get(Account, account_id)
+
+
+def list_by_customer(session: Session, customer_id: str):
+    return session.query(Account).filter(Account.customer_id == customer_id).all()
 
 
 def update_account(
