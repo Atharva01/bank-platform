@@ -15,6 +15,19 @@ from bank_platform.graph import (
 )
 
 
+def test_sub_agent_prompts_forbid_mentioning_internal_routing():
+    # Found live: the assistant's reply prefixed itself with "As reported
+    # by the accounts agent/team" - leaking the multi-agent architecture
+    # to the customer, who should never see it exists.
+    for prompt in (ACCOUNTS_AGENT_PROMPT, TRANSACTION_AGENT_PROMPT, SERVICE_AGENT_PROMPT):
+        assert "never mention agents, teams, tools" in prompt
+
+
+def test_supervisor_relays_verbatim_without_internal_framing():
+    assert "VERBATIM" in SUPERVISOR_PROMPT
+    assert "must never see that a multi-agent system exists" in SUPERVISOR_PROMPT
+
+
 def test_supervisor_names_every_sub_agent():
     for name in ("accounts_agent", "transaction_agent", "service_agent"):
         assert name in SUPERVISOR_PROMPT

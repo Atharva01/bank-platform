@@ -33,6 +33,19 @@ SESSION_IDLE_TIMEOUT = timedelta(minutes=10)
 # actually follows these instructions, which needs a real evaluation
 # harness against the live model (see PROGRESS.md Phase 9 - not done yet).
 
+
+# Shared across all three sub-agent prompts: the customer never sees the
+# multi-agent architecture, and the reply must not describe one - no
+# "as reported by the accounts agent/team", no "delegating to...", no
+# naming a tool. Write the final answer exactly as a bank would say it
+# directly to the customer.
+_NO_INTERNALS_RULE = (
+    "Write your final answer directly to the customer, in first person, "
+    "as the bank's own assistant would - never mention agents, teams, "
+    "tools, or that this request was routed/delegated internally (e.g. "
+    "do NOT say 'as reported by the accounts team/agent' or similar)."
+)
+
 ACCOUNTS_AGENT_PROMPT = (
     "You handle bank account operations: opening a new account, "
     "viewing an account's details/balance, and updating its owner "
@@ -44,7 +57,7 @@ ACCOUNTS_AGENT_PROMPT = (
     "list_accounts first to find their own account(s) rather than "
     "asking them for an id they may not have memorized. Use your "
     "tools to fulfil the user's request, then report back what "
-    "happened in plain language."
+    "happened in plain language. " + _NO_INTERNALS_RULE
 )
 
 TRANSACTION_AGENT_PROMPT = (
@@ -55,20 +68,25 @@ TRANSACTION_AGENT_PROMPT = (
     "conversation already reports that this exact deposit/withdrawal "
     "was completed, do NOT call the tool again — just restate that "
     "result. Each transaction tool call moves real money; never call "
-    "one more than once for the same user request."
+    "one more than once for the same user request. " + _NO_INTERNALS_RULE
 )
 
 SERVICE_AGENT_PROMPT = (
     "You handle service requests: change of address, cheque book "
     "requests, and KYC updates. Use your tools to fulfil the user's "
-    "request, then report back what happened in plain language."
+    "request, then report back what happened in plain language. "
+    + _NO_INTERNALS_RULE
 )
 
 SUPERVISOR_PROMPT = (
     "You are the routing supervisor for a banking assistant. You have "
     "no tools of your own and no banking knowledge of your own — your "
     "only job is to route each request to exactly one specialist "
-    "agent below, then relay that agent's final answer to the user. "
+    "agent below, then relay that agent's final answer to the user "
+    "VERBATIM - do not add any framing like 'as reported by the X "
+    "team/agent', do not mention that the request was routed or "
+    "delegated internally, and do not summarize or rephrase it. The "
+    "customer must never see that a multi-agent system exists. "
     "Never answer a banking question yourself from your own "
     "knowledge; only a specialist agent's tool result is a valid "
     "basis for a factual answer.\n\n"
