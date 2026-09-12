@@ -675,3 +675,39 @@ that mostly isn't "personal" in the first place.
 **Solution:** what was changed and why that approach specifically.
 **Why it mattered:** the judgment call / risk avoided, in plain terms.
 ```
+
+## 22. Customer auth's ownership check crashed /chat with a raw HTTP error instead of a conversational reply
+
+**Problem:** Found live via the new chat UI - asking the assistant about
+an account_id typed by the customer (a typo, or simply not theirs)
+returned a raw "Request failed (404)" in the frontend instead of a normal
+assistant reply, breaking `/chat`'s established contract that failures
+are communicated conversationally by the LLM, not as raw status codes.
+
+**Root cause:** `authz.owner_guard()` (added for customer ownership
+enforcement) runs its ownership check *before* calling into the wrapped
+tool chain - it has to, to deny access before any business logic runs -
+which means that check sits outside `tool_utils.tool_safe()`'s own
+try/except. When ownership failed, `owner_guard` raised the plain
+`NotFoundError` domain exception directly, which propagated uncaught past
+LangChain's `handle_tool_error` (that only catches `ToolException`, per
+`tool_utils.py`'s own docstring) all the way out of the LangGraph
+invocation, out of `graph.py`'s `run()`, and into `main.py`'s *global*
+exception handler - registered for the whole app, not scoped to REST -
+which maps `NotFoundError` to a 404 HTTP response.
+
+**Solution:** `owner_guard` now catches its own `NotFoundError` and
+re-raises it as a `ToolException`, the same conversion `tool_safe` already
+performs for the business-layer exceptions it wraps. `handle_tool_error`
+catches it normally from there, and the agent can react like it does to
+any other tool failure - in the observed case, reporting the ID wasn't
+found and falling back to `list_accounts` to answer the customer's actual
+question anyway. 4 new tests (`tests/test_authz.py`), including one
+asserting the denial is specifically a `ToolException`, not a raw domain
+exception, so this can't silently regress.
+
+**Why it mattered:** any new tool-layer wrapper that raises a domain
+exception directly (as opposed to calling into `tool_safe`-wrapped code)
+bypasses the one thing that makes `/chat` failures feel like a
+conversation instead of a crash. This is a pattern to watch for in any
+future guard/wrapper added outside `tool_safe`'s own boundary.
