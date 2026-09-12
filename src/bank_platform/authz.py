@@ -20,6 +20,7 @@ can't access from one that was never there (standard IDOR mitigation).
 from functools import wraps
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import ToolException
 
 from bank_platform import accounts_server
 from bank_platform.exceptions import NotFoundError
@@ -40,6 +41,14 @@ def owner_guard(func, resolve_account_id):
     given the tool's real incoming kwargs (account_id/id are never
     tokenized - see pii_guard.py's narrowed scope - so these are always
     real values, safe to check directly).
+
+    Converts a failed check to ToolException (not the raw NotFoundError
+    require_owner raises for REST callers) - this runs outside
+    tool_safe's own try/except, so an uncaught NotFoundError here would
+    propagate past handle_tool_error and surface as a raw HTTP 404 from
+    /chat instead of a message the LLM can react to (found live: the
+    agent should be able to say "that account wasn't found" or fall back
+    to list_accounts, not crash the whole request).
     """
     # Same reasoning as pii_guard's identical check: only forward `config`
     # to the inner function if it actually declares one.
@@ -48,7 +57,10 @@ def owner_guard(func, resolve_account_id):
     @wraps(func)
     def wrapper(*args, config: RunnableConfig, **kwargs):
         customer_id = (config or {}).get("configurable", {}).get("customer_id")
-        require_owner(resolve_account_id(kwargs), customer_id)
+        try:
+            require_owner(resolve_account_id(kwargs), customer_id)
+        except NotFoundError as e:
+            raise ToolException(str(e)) from e
         if forwards_config:
             return func(*args, config=config, **kwargs)
         return func(*args, **kwargs)
