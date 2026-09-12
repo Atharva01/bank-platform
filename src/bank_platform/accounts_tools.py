@@ -39,6 +39,21 @@ class _ListAccountsArgs(BaseModel):
     config-injected customer_id."""
 
 
+# Shared across all three sub-agents (accounts/transaction/service), not
+# just this domain's own tool list - found live that transaction_agent and
+# service_agent had no way to resolve "my account" and asked the customer
+# for an account id they didn't already know, even though they're
+# authenticated. Every sub-agent needs the same way out of that.
+LIST_ACCOUNTS_TOOL = StructuredTool.from_function(
+    func=inject_customer_id(tool_safe(accounts_server.list_accounts_for_customer)),
+    args_schema=_ListAccountsArgs,
+    handle_tool_error=True,
+    name="list_accounts",
+    description="List every account the authenticated customer owns - use this before asking the "
+    "customer for an account id, e.g. to answer 'what's my balance', 'what accounts do I have', or "
+    "to find which account to act on when the customer says 'my account' without an id.",
+)
+
 ACCOUNTS_TOOLS = [
     StructuredTool.from_function(
         func=inject_customer_id(
@@ -61,14 +76,7 @@ ACCOUNTS_TOOLS = [
         ),
         handle_tool_error=True,
     ),
-    StructuredTool.from_function(
-        func=inject_customer_id(tool_safe(accounts_server.list_accounts_for_customer)),
-        args_schema=_ListAccountsArgs,
-        handle_tool_error=True,
-        name="list_accounts",
-        description="List every account the authenticated customer owns - use this before asking the "
-        "customer for an account id, e.g. to answer 'what's my balance' or 'what accounts do I have'.",
-    ),
+    LIST_ACCOUNTS_TOOL,
     # delete_account is deliberately NOT exposed here - closing an account
     # is not a customer/agent self-service action, it needs elevated
     # (staff/admin) access (see Phase 6). No "apply for closure" path

@@ -6,6 +6,7 @@ transactions_server.py itself stays framework-agnostic, unchanged.
 from langchain_core.tools import StructuredTool
 
 from bank_platform import transactions_server
+from bank_platform.accounts_tools import LIST_ACCOUNTS_TOOL
 from bank_platform.authz import owner_guard
 from bank_platform.tool_utils import idempotent, tool_safe
 
@@ -48,4 +49,8 @@ TRANSACTIONS_TOOLS = [
         func=owner_guard(tool_safe(transactions_server.delete_transaction), resolve_account_id=_by_transaction_id),
         handle_tool_error=True,
     ),
+    # Shared with accounts_agent/service_agent - see accounts_tools.py's
+    # LIST_ACCOUNTS_TOOL docstring. Without this, "deposit into my
+    # account" with no id stated had no way to be resolved except asking.
+    LIST_ACCOUNTS_TOOL,
 ]

@@ -62,7 +62,11 @@ ACCOUNTS_AGENT_PROMPT = (
 
 TRANSACTION_AGENT_PROMPT = (
     "You handle transactions: deposits, withdrawals, viewing statement "
-    "history, and correcting or reversing past transactions. Use your "
+    "history, and correcting or reversing past transactions. The caller "
+    "is always an authenticated customer - if they say 'my account' "
+    "without stating an account id, call list_accounts first to find "
+    "their own account(s) rather than asking them for an id they may not "
+    "have memorized. Use your "
     "tools to fulfil the user's request, then report back what "
     "happened in plain language. If your own prior message in this "
     "conversation already reports that this exact deposit/withdrawal "
@@ -73,8 +77,11 @@ TRANSACTION_AGENT_PROMPT = (
 
 SERVICE_AGENT_PROMPT = (
     "You handle service requests: change of address, cheque book "
-    "requests, and KYC updates. Use your tools to fulfil the user's "
-    "request, then report back what happened in plain language. "
+    "requests, and KYC updates. The caller is always an authenticated "
+    "customer - if they don't state an account id, call list_accounts "
+    "first to find their own account(s) rather than asking them for an "
+    "id they may not have memorized. Use your tools to fulfil the "
+    "user's request, then report back what happened in plain language. "
     + _NO_INTERNALS_RULE
 )
 

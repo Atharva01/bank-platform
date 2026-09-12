@@ -6,6 +6,7 @@ stays framework-agnostic, unchanged.
 from langchain_core.tools import StructuredTool
 
 from bank_platform import service_server
+from bank_platform.accounts_tools import LIST_ACCOUNTS_TOOL
 from bank_platform.authz import owner_guard
 from bank_platform.tool_utils import idempotent, tool_safe
 
@@ -41,4 +42,8 @@ SERVICE_TOOLS = [
         func=owner_guard(tool_safe(service_server.delete_service_request), resolve_account_id=_by_request_id),
         handle_tool_error=True,
     ),
+    # Shared with accounts_agent/transaction_agent - see accounts_tools.py's
+    # LIST_ACCOUNTS_TOOL docstring. Without this, "change my address" with
+    # no id stated had no way to be resolved except asking the customer.
+    LIST_ACCOUNTS_TOOL,
 ]
