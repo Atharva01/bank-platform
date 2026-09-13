@@ -32,7 +32,7 @@ def customer_token():
 @pytest.fixture(autouse=True)
 def reset_rate_limiter():
     # The Limiter is a module-level singleton shared with every other test
-    # file that hits /auth/login (test_auth.py). Reset before each test in
+    # file that hits /api/auth/login (test_auth.py). Reset before each test in
     # this file so those unrelated calls never count toward the limits
     # being tested here, and so the two tests below don't interfere with
     # each other.
@@ -42,10 +42,10 @@ def reset_rate_limiter():
 
 def test_login_is_rate_limited_after_five_per_minute():
     for _ in range(5):
-        response = client.post("/auth/login", data={"username": "nobody", "password": "wrong"})
+        response = client.post("/api/auth/login", data={"username": "nobody", "password": "wrong"})
         assert response.status_code == 401
 
-    response = client.post("/auth/login", data={"username": "nobody", "password": "wrong"})
+    response = client.post("/api/auth/login", data={"username": "nobody", "password": "wrong"})
     assert response.status_code == 429
 
 
@@ -59,11 +59,11 @@ def test_chat_is_rate_limited_after_twenty_per_minute(monkeypatch, customer_toke
 
     for i in range(20):
         response = client.post(
-            "/chat", json={"session_id": "rate-limit-test", "message": f"hi {i}"}, headers=headers
+            "/api/chat", json={"session_id": "rate-limit-test", "message": f"hi {i}"}, headers=headers
         )
         assert response.status_code == 200
 
     response = client.post(
-        "/chat", json={"session_id": "rate-limit-test", "message": "one too many"}, headers=headers
+        "/api/chat", json={"session_id": "rate-limit-test", "message": "one too many"}, headers=headers
     )
     assert response.status_code == 429

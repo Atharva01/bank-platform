@@ -1,0 +1,144 @@
+# Real-deployment stack (bare VPS + Docker Compose) - additive, NOT a
+# replacement for docker-compose.yml, which stays the local-dev
+# Postgres-only file documented in CLAUDE.md's "Running it" section.
+#
+# Reference architecture: FastAPI's own official full-stack-fastapi-template
+# (https://github.com/fastapi/full-stack-fastapi-template) - the documented
+# pattern for "FastAPI + Traefik + Docker Compose": an external
+# traefik-public network shared between Traefik and the app services,
+# single-domain path-based routing (frontend at the root, backend under
+# /api - same-origin, no CORS needed in production), Docker-provider
+# label-based routing with explicit opt-in (exposedbydefault=false).
+#
+# One-time setup before first use (see CLAUDE.md's "Deploying" section):
+#   docker network create traefik-public
+#
+# Usage:
+#   docker compose -f docker-compose.prod.yml up -d
+
+services:
+  db:
+    image: postgres:17
+    restart: always
+    environment:
+      POSTGRES_USER: bank
+      POSTGRES_PASSWORD: bank
+      POSTGRES_DB: bank_platform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # No published port - only reachable inside this compose network.
+    # Local dev's docker-compose.yml publishes 5432 for host convenience;
+    # that's not appropriate once this is a real deployment.
+
+  backend:
+    build:
+      context: .
+    restart: always
+    env_file:
+      - .env
+    environment:
+      # In-network service address - "localhost" (the local-dev default,
+      # see .env.example) doesn't resolve to the db container.
+      - DATABASE_URL=postgresql+psycopg://bank:bank@db:5432/bank_platform
+    depends_on:
+      - db
+    networks:
+      - default
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+
+      - traefik.http.services.backend.loadbalancer.server.port=8000
+
+      # Only an HTTPS router is needed - the "http" entrypoint redirects
+      # everything to https globally (see the traefik service's command
+      # below), so there's no separate http-entrypoint router/middleware
+      # to define per service.
+      - traefik.http.routers.backend-https.rule=Host(`${DOMAIN?Variable not set}`) && PathPrefix(`/api`)
+      - traefik.http.routers.backend-https.entrypoints=https
+      - traefik.http.routers.backend-https.tls=true
+      - traefik.http.routers.backend-https.tls.certresolver=le
+      - traefik.http.routers.backend-https.middlewares=security-headers,backend-ratelimit
+
+      # Security headers (Traefik v3 headers middleware) - HSTS, clickjacking/
+      # MIME-sniffing protection. Shared with the frontend router below.
+      - traefik.http.middlewares.security-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.security-headers.headers.stsPreload=true
+      - traefik.http.middlewares.security-headers.headers.frameDeny=true
+      - traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+
+      # Edge-level rate limiting (Traefik v3 ratelimit middleware) - fixes
+      # a real gap on record: slowapi's in-app limiter (rate_limit.py) is
+      # in-memory and per-process, so it silently stops working correctly
+      # past one backend instance. This is centralized at the edge instead,
+      # in front of however many backend instances exist. slowapi stays too
+      # (defense in depth, already working/tested - not removed).
+      - traefik.http.middlewares.backend-ratelimit.ratelimit.average=100
+      - traefik.http.middlewares.backend-ratelimit.ratelimit.period=1m
+      - traefik.http.middlewares.backend-ratelimit.ratelimit.burst=50
+      - traefik.http.middlewares.backend-ratelimit.ratelimit.ipstrategy.depth=1
+
+  frontend:
+    build:
+      context: ../bank-platform-ui
+      args:
+        VITE_API_BASE_URL: https://${DOMAIN}/api
+    restart: always
+    networks:
+      - traefik-public
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=traefik-public
+
+      - traefik.http.services.frontend.loadbalancer.server.port=80
+
+      - traefik.http.routers.frontend-https.rule=Host(`${DOMAIN?Variable not set}`)
+      - traefik.http.routers.frontend-https.entrypoints=https
+      - traefik.http.routers.frontend-https.tls=true
+      - traefik.http.routers.frontend-https.tls.certresolver=le
+      - traefik.http.routers.frontend-https.middlewares=security-headers
+
+  traefik:
+    image: traefik:v3.3
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - traefik-public-certificates:/certificates
+    command:
+      - --providers.docker
+      - --providers.docker.endpoint=unix:///var/run/docker.sock
+      # Explicit opt-in only (traefik.enable=true) - not "route every
+      # container by default".
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.http.address=:80
+      - --entrypoints.https.address=:443
+      # tlsChallenge - still Traefik's own recommended default for a
+      # single VPS reachable on 443 (vs. httpChallenge, needed only for
+      # different port-reachability setups, or dnsChallenge, needed for
+      # wildcard certs or an in-front CDN/proxy - neither applies here).
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL?Variable not set}
+      - --certificatesresolvers.le.acme.storage=/certificates/acme.json
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --accesslog
+      - --log
+      # Redirects all plain-HTTP traffic on the "http" entrypoint to
+      # https globally - no per-service http router/middleware needed.
+      - --entrypoints.http.http.redirections.entrypoint.to=https
+      - --entrypoints.http.http.redirections.entrypoint.scheme=https
+    networks:
+      - traefik-public
+
+volumes:
+  postgres_data:
+  traefik-public-certificates:
+
+networks:
+  default:
+  traefik-public:
+    external: true

@@ -55,7 +55,7 @@ def customer_headers():
 
 @pytest.fixture
 def account(customer_headers):
-    response = client.post("/accounts", json={"owner_name": "Auth Test", "balance": 50}, headers=customer_headers)
+    response = client.post("/api/accounts", json={"owner_name": "Auth Test", "balance": 50}, headers=customer_headers)
     account_id = response.json()["id"]
     yield account_id
     db = SessionLocal()
@@ -67,7 +67,7 @@ def account(customer_headers):
 
 
 def test_login_with_correct_credentials_returns_a_token(staff_user):
-    response = client.post("/auth/login", data={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
+    response = client.post("/api/auth/login", data={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
     assert response.status_code == 200
     body = response.json()
     assert body["token_type"] == "bearer"
@@ -77,22 +77,22 @@ def test_login_with_correct_credentials_returns_a_token(staff_user):
 
 
 def test_login_with_wrong_password_returns_401(staff_user):
-    response = client.post("/auth/login", data={"username": _TEST_USERNAME, "password": "wrong"})
+    response = client.post("/api/auth/login", data={"username": _TEST_USERNAME, "password": "wrong"})
     assert response.status_code == 401
 
 
 def test_login_with_unknown_username_returns_401():
-    response = client.post("/auth/login", data={"username": "nobody", "password": "irrelevant"})
+    response = client.post("/api/auth/login", data={"username": "nobody", "password": "irrelevant"})
     assert response.status_code == 401
 
 
 def test_delete_account_without_token_returns_401(account):
-    response = client.delete(f"/accounts/{account}")
+    response = client.delete(f"/api/accounts/{account}")
     assert response.status_code == 401
 
 
 def test_delete_account_with_garbage_token_returns_401(account):
-    response = client.delete(f"/accounts/{account}", headers={"Authorization": "Bearer not-a-real-token"})
+    response = client.delete(f"/api/accounts/{account}", headers={"Authorization": "Bearer not-a-real-token"})
     assert response.status_code == 401
 
 
@@ -100,20 +100,20 @@ def test_delete_account_with_token_for_a_deleted_staff_user_returns_401(account)
     # Simulates a revoked/removed staff account - the token itself is
     # well-formed and unexpired, but re-fetching the user must still fail.
     token = create_access_token("someone-who-does-not-exist", "staff")
-    response = client.delete(f"/accounts/{account}", headers={"Authorization": f"Bearer {token}"})
+    response = client.delete(f"/api/accounts/{account}", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 401
 
 
 def test_a_customer_token_cannot_pass_as_a_staff_token(account, customer_headers):
     # A customer and a staff JWT must be structurally distinguishable -
     # otherwise a leaked/reused customer token could delete accounts.
-    response = client.delete(f"/accounts/{account}", headers=customer_headers)
+    response = client.delete(f"/api/accounts/{account}", headers=customer_headers)
     assert response.status_code == 401
 
 
 def test_delete_account_with_valid_token_succeeds(staff_user, account, customer_headers):
-    login = client.post("/auth/login", data={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
+    login = client.post("/api/auth/login", data={"username": _TEST_USERNAME, "password": _TEST_PASSWORD})
     token = login.json()["access_token"]
-    response = client.delete(f"/accounts/{account}", headers={"Authorization": f"Bearer {token}"})
+    response = client.delete(f"/api/accounts/{account}", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
-    assert client.get(f"/accounts/{account}", headers=customer_headers).status_code == 404
+    assert client.get(f"/api/accounts/{account}", headers=customer_headers).status_code == 404

@@ -155,7 +155,7 @@ def test_unknown_run_id_does_not_crash():
     db.close()
 
 
-# --- GET /observability/usage (REST) ---
+# --- GET /api/observability/usage (REST) ---
 
 
 @pytest.fixture
@@ -209,12 +209,12 @@ def seeded_events():
 
 
 def test_usage_endpoint_requires_staff_token(seeded_events):
-    response = client.get("/observability/usage")
+    response = client.get("/api/observability/usage")
     assert response.status_code == 401
 
 
 def test_usage_endpoint_reports_seeded_totals(seeded_events, staff_token):
-    response = client.get("/observability/usage", headers={"Authorization": f"Bearer {staff_token}"})
+    response = client.get("/api/observability/usage", headers={"Authorization": f"Bearer {staff_token}"})
     assert response.status_code == 200
     body = response.json()
     assert body["totals"]["llm_calls"] >= 1

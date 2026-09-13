@@ -745,3 +745,46 @@ supervisor setup - every event from this call recorded `agent_name:
 None` - so that column should be treated as unpopulated in practice, not
 a future reporting dimension, unless revisited with deeper LangGraph
 internals work.
+
+## 24. Traefik's Docker provider can't be verified end-to-end on Windows/Docker Desktop
+
+**Problem:** Bringing up the new `docker-compose.prod.yml` stack locally to
+verify Phase 7's Traefik edge layer, the `traefik` container logged
+`Failed to retrieve information of the docker client and server host` /
+`Error response from daemon: ""` in a retry loop, and never routed a
+single request to either `backend` or `frontend` (every request got
+Traefik's own bare 404).
+
+**Root cause:** Isolated to Docker Desktop for Windows' socket-forwarding
+layer, not the compose/label configuration. Verified directly: a plain
+`docker info` run through the exact same `/var/run/docker.sock` bind
+mount (`MSYS_NO_PATHCONV=1 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock:ro docker:27-cli docker info`)
+succeeds cleanly - the socket itself is reachable and functional. The
+failure is specific to Traefik's own embedded Docker client library
+against Docker Desktop's Windows socket-forwarding translation layer.
+Also ruled out: Git Bash's path-mangling of `-v /var/run/docker.sock:...`
+(a real, separate gotcha hit while debugging this - fixed with
+`MSYS_NO_PATHCONV=1`, but didn't affect the compose-file version of the
+same mount, which was already correct) and API version mismatch
+(pinning `DOCKER_API_VERSION=1.43` on the Traefik container made no
+difference, reverted).
+
+**Solution:** None from this environment - this is a Windows/Docker
+Desktop-specific limitation, not a bug in the Traefik/Compose design
+itself (which follows FastAPI's own reference architecture, proven on
+real Linux Docker hosts). What *was* verified locally: the compose file
+parses cleanly (`docker compose config`), the new backend Dockerfile
+builds and runs correctly standalone, and Traefik's global HTTP→HTTPS
+entrypoint redirect works (a bare `curl` to port 80 got a real 301 to
+https - that path doesn't depend on the Docker provider actually
+discovering containers). Full label-based routing, the security headers
+middleware, the edge rate limiter, and real Let's Encrypt TLS all still
+need verifying for real once this deploys to the actual VPS (a real Linux
+Docker host, where this exact pattern is standard and doesn't hit this
+issue).
+
+**Why it mattered:** avoids reporting "Traefik works" on the strength of
+a local test that never actually routed a single request - the honest
+status is "the pieces that don't depend on Windows' Docker socket
+quirk are verified; the Docker-provider routing itself is not, and won't
+be until the real VPS."

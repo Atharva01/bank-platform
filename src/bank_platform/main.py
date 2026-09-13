@@ -1,8 +1,9 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -70,21 +71,33 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# Dev-permissive for now — no frontend origin decided yet. Tighten
-# allow_origins to specific hosts before any real deployment.
+# Phase 7 - Edge Layer: same-origin in production once Traefik mounts the
+# backend under /api on the same domain as the frontend (see
+# docker-compose.prod.yml) - CORS headers become unnecessary there, but
+# local dev still needs them (frontend dev server on a different port
+# than the backend), so this stays configurable rather than removed.
+# Defaults to the old permissive value so local dev is unaffected.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[os.environ.get("FRONTEND_ORIGIN", "*")],
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(accounts_router.router)
-app.include_router(transactions_router.router)
-app.include_router(service_router.router)
-app.include_router(auth_router.router)
-app.include_router(customer_router.router)
-app.include_router(observability_router.router)
+# Phase 7 - Edge Layer: every backend route lives under /api so Traefik
+# can route the whole domain to the frontend except this one path prefix
+# (Host(domain) && PathPrefix(/api)), matching FastAPI's own reference
+# deployment architecture (full-stack-fastapi-template) - same-origin by
+# construction, no CORS to get wrong in production. Each router's own
+# internal prefix (e.g. accounts_router's "/accounts") is untouched; only
+# nested one level deeper here.
+api_router = APIRouter(prefix="/api")
+api_router.include_router(accounts_router.router)
+api_router.include_router(transactions_router.router)
+api_router.include_router(service_router.router)
+api_router.include_router(auth_router.router)
+api_router.include_router(customer_router.router)
+api_router.include_router(observability_router.router)
 
 # Maps the business-layer exception taxonomy (exceptions.py) to real HTTP
 # status codes for the REST endpoints. /chat is intentionally exempt - its
@@ -128,10 +141,13 @@ async def home():
     return {"message": "Welcome home!"}
 
 
-@app.post("/chat", response_model=ChatResponse)
+@api_router.post("/chat", response_model=ChatResponse)
 @limiter.limit("20/minute")
 async def chat(
     request: Request, chat_request: ChatRequest, current_customer: Customer = Depends(get_current_customer)
 ):
     reply = run(chat_request.message, chat_request.session_id, current_customer.id)
     return ChatResponse(reply=reply)
+
+
+app.include_router(api_router)

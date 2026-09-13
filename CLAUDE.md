@@ -110,6 +110,50 @@ uv run pytest -v               # requires the DB container running, no mocking
 Port 5432 is also used by an unrelated project (`fastapi-postgresql-learning`)
 on this machine — check `docker ps -a` before assuming which container is up.
 
+## Deploying
+
+Real deployment target: a bare VPS, self-managed Docker Compose, fronted by
+**Traefik** (Phase 7 — Edge Layer). Reference architecture followed: FastAPI's
+own official
+[`full-stack-fastapi-template`](https://github.com/fastapi/full-stack-fastapi-template)
+— an external `traefik-public` Docker network shared between Traefik and the
+app services, single-domain path-based routing (frontend at the domain root,
+every backend route under `/api` — same-origin, no CORS needed in
+production), Docker-provider label-based routing with explicit per-service
+opt-in.
+
+```bash
+docker network create traefik-public   # one-time, before first deploy
+# Set DOMAIN and ACME_EMAIL in .env (real values — .env.example has
+# placeholders), then:
+docker compose -f docker-compose.prod.yml up -d
+```
+
+`docker-compose.prod.yml` is additive — `docker-compose.yml` stays the
+local-dev, Postgres-only file described above, unchanged and still used for
+local dev alongside `fastapi dev`. The prod compose file builds the backend
+from this repo's own `Dockerfile` (via `fastapi run`, not `fastapi dev`) and
+the frontend from `../bank-platform-ui` (assumes the two repos are checked
+out side by side, matching local dev). `db` and `backend` publish no host
+ports in the prod stack — Traefik is the only public entry point.
+
+**Known limitation, not yet worked around:** the Traefik Docker-provider
+routing above could not be verified end-to-end locally on Windows/Docker
+Desktop — Traefik's own Docker client fails against Docker Desktop's socket-
+forwarding layer with `Failed to retrieve information of the docker client
+and server host` (confirmed the socket mount itself is fine: a plain `docker
+info` through the identical mount succeeds; the incompatibility is specific
+to Traefik's client library, not the mount). Real Let's Encrypt TLS
+similarly can't be tested without the real domain. Both need verifying for
+real on the actual VPS (a real Linux Docker host) before trusting this in
+production — see PROBLEMS.md.
+
+Explicitly out of scope so far: true DDoS mitigation (needs something in
+front of the VPS itself, e.g. Cloudflare, once a DNS provider is chosen);
+full WAF (CrowdSec/ModSecurity); a real secrets manager for `.env`'s
+contents; horizontal backend scaling (Traefik's routing doesn't block adding
+replicas later, but none are set up now).
+
 ## Conventions
 
 - Branch: `main` (not `master`).
