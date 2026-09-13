@@ -17,6 +17,7 @@ from bank_platform.accounts_tools import ACCOUNTS_TOOLS
 from bank_platform.database import DATABASE_URL
 from bank_platform.exceptions import SessionOwnershipError
 from bank_platform.llm import llm
+from bank_platform.observability import event_logger
 from bank_platform.service_tools import SERVICE_TOOLS
 from bank_platform.tool_utils import _completed_calls
 from bank_platform.transactions_tools import TRANSACTIONS_TOOLS
@@ -243,7 +244,16 @@ def _invoke(message: str, session_id: str, customer_id: str) -> dict:
     the LLM in raw form. This is a known-value substitution only, not
     general PII detection - see pii_guard.py's module docstring.
     """
-    config = {"configurable": {"thread_id": session_id, "customer_id": customer_id}}
+    config = {
+        "configurable": {"thread_id": session_id, "customer_id": customer_id},
+        # Phase 8 (Observability) - "metadata", not "configurable", is what
+        # actually reaches the callback handler's *_end/*_error hooks
+        # (verified empirically - LangChain doesn't pass "configurable"
+        # there, and doesn't even pass "metadata" itself past *_start, so
+        # the handler captures this once at start and carries it forward).
+        "metadata": {"thread_id": session_id, "customer_id": customer_id},
+        "callbacks": [event_logger],
+    }
     sanitized_message = pii_guard.sanitize_incoming(message, session_id)
     payload = {"messages": [{"role": "user", "content": sanitized_message}]}
     attempts = 3

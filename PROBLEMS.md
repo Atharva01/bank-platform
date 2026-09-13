@@ -711,3 +711,37 @@ exception directly (as opposed to calling into `tool_safe`-wrapped code)
 bypasses the one thing that makes `/chat` failures feel like a
 conversation instead of a crash. This is a pattern to watch for in any
 future guard/wrapper added outside `tool_safe`'s own boundary.
+
+## 23. Phase 8's instrumentation immediately surfaced a real latency anomaly: an 85.7s LLM call despite a 30s client timeout
+
+**Problem:** The first live call made through the new observability
+logging (Phase 8) recorded one `llm_call` event with `duration_ms:
+85752` - nearly 86 seconds - inside a request that still completed
+successfully. `llm.py`'s `ChatOpenAI` client is configured with
+`timeout=30`, so this call should have failed with `APITimeoutError`
+well before 86s, not succeeded.
+
+**Root cause:** Not fully diagnosed - flagging honestly rather than
+guessing. Plausible explanations: the OpenAI SDK's own internal retry
+behavior (separate from `graph.py`'s outer resume-retry loop) may retry
+sub-requests within a single client-level call, with cumulative elapsed
+time exceeding the nominal per-attempt timeout before the callback's
+`on_llm_end` fires; or Muse Spark's server-side behavior for a longer
+generation (this was the supervisor's final, longest relay message) may
+not map cleanly onto a client-side connect/read timeout. Needs a
+dedicated investigation, not a Phase 8 side-effect fix.
+
+**Solution:** None yet - logged as a real, observed anomaly. This is
+exactly the kind of thing Phase 8 was built to surface (zero visibility
+existed before this instrumentation), not something to chase down
+mid-phase. Revisit if it recurs or gets worse; the `AgentEventLog` table
+now makes this pattern queryable going forward instead of invisible.
+
+**Why it mattered:** confirms the instrumentation itself is doing its
+job - the very first live call through it caught something that had been
+happening silently. Also confirms `agent_name` attribution is NOT
+reliably available via LangGraph's callback `tags`/`metadata` in this
+supervisor setup - every event from this call recorded `agent_name:
+None` - so that column should be treated as unpopulated in practice, not
+a future reporting dimension, unless revisited with deeper LangGraph
+internals work.

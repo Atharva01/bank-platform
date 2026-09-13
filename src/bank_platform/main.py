@@ -10,7 +10,14 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from bank_platform import accounts_router, auth_router, customer_router, service_router, transactions_router
+from bank_platform import (
+    accounts_router,
+    auth_router,
+    customer_router,
+    observability_router,
+    service_router,
+    transactions_router,
+)
 from bank_platform.auth import get_current_customer
 from bank_platform.exceptions import (
     InsufficientFundsError,
@@ -77,6 +84,7 @@ app.include_router(transactions_router.router)
 app.include_router(service_router.router)
 app.include_router(auth_router.router)
 app.include_router(customer_router.router)
+app.include_router(observability_router.router)
 
 # Maps the business-layer exception taxonomy (exceptions.py) to real HTTP
 # status codes for the REST endpoints. /chat is intentionally exempt - its

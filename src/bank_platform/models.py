@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, DateTime, String, Numeric
+from sqlalchemy import JSON, Boolean, DateTime, Integer, String, Numeric
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
@@ -76,3 +76,29 @@ class Session(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc)
     )
+
+class AgentEventLog(Base):
+    """Phase 8 (Observability & Cost Tracker) - one row per LLM call or
+    tool call, written by observability.py's callback handler. Deliberately
+    metadata only (tokens, timing, success/failure) - never raw prompt/
+    reply/tool-arg content, which is where real account data lives and
+    where Phase 5's PII tokenization already draws its own line. An
+    append-only log, not a normalized schema - matches what this actually
+    is."""
+    __tablename__ = "agent_event_log"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    session_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    customer_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    event_type: Mapped[str] = mapped_column(String)  # "llm_call" | "tool_call"
+    # Best-effort only - not guaranteed populated, see observability.py.
+    agent_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    tool_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    total_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    success: Mapped[bool] = mapped_column(Boolean, default=True)
+    error_message: Mapped[str | None] = mapped_column(String, nullable=True)
