@@ -16,4 +16,15 @@ wheels/
 *.txt
 
 # Environment variables and secrets
-.env 
+.env
+
+# Terraform (infra/) - local state and the downloaded provider plugins are
+# never committed. terraform.tfvars.example stays tracked; the real
+# terraform.tfvars doesn't. .terraform.lock.hcl (the provider version/
+# checksum lockfile) IS committed - Terraform's own convention, like any
+# other lockfile - so it's deliberately not listed here.
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/*.tfvars
+!infra/terraform.tfvars.example

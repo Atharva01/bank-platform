@@ -154,6 +154,64 @@ full WAF (CrowdSec/ModSecurity); a real secrets manager for `.env`'s
 contents; horizontal backend scaling (Traefik's routing doesn't block adding
 replicas later, but none are set up now).
 
+### Cloud target: AWS EC2, provisioned via Terraform
+
+The "bare VPS" above is concretely **AWS EC2** — same Docker Compose/Traefik
+stack, unchanged, just hosted on an AWS-provisioned VM instead of a
+generic self-managed server. `infra/` (new, Terraform, official
+[`hashicorp/aws`](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+provider) declares the VM and everything AWS-specific around it:
+
+- **Instance**: Amazon Linux 2023, `t4g.small` (Graviton/ARM — cheaper
+  than the x86 equivalent, nothing in this stack requires x86), looked up
+  by AMI name filter (not a hardcoded AMI ID that goes stale). 30GB gp3
+  root volume — AL2023's 8GB default is too small once Docker images,
+  Postgres data, and Traefik's ACME certs are all on it.
+- **Security group**: only 80/443 inbound from `0.0.0.0/0` — matches the
+  Traefik design exactly. **No inbound port 22.** Shell access is via
+  **AWS Systems Manager Session Manager** instead (an IAM instance role
+  with `AmazonSSMManagedInstanceCore`) — zero inbound ports, no SSH key
+  pair to provision or lose, full session logging via CloudTrail. Per
+  AWS's own guidance:
+  [security group rules](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/security-group-rules.html),
+  [Session Manager](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager.html).
+- **Elastic IP**: a stable public IP that survives instance stop/start
+  ([AWS docs](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/elastic-ip-addresses-eip.html)) —
+  point the domain's `A` record at `terraform output public_ip` (registrar-
+  agnostic; Route 53 isn't required).
+- **Backup**: a daily AWS Data Lifecycle Manager snapshot of the root
+  volume (`infra/backup.tf`) — the one thing genuinely missing from the
+  original bare-VPS plan. Covers whole-instance disaster recovery,
+  including Docker's named volumes (`postgres_data`,
+  `traefik-public-certificates`), which live under `/var/lib/docker` on
+  that same volume. Postgres-level `pg_dump`-to-S3 backups would be a
+  further improvement, not built here.
+- **State**: local (`infra/terraform.tfstate`, gitignored) — a single
+  instance managed by one person doesn't warrant a remote S3/DynamoDB
+  backend; revisit only if this becomes a team-managed setup.
+
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars   # fill in real domain/acme_email
+terraform init
+terraform plan     # review before creating anything real/billable
+terraform apply
+terraform output public_ip   # point the domain's A record at this
+```
+
+`infra/bootstrap.sh` runs automatically as EC2 user-data on first boot —
+installs Docker + the Compose plugin, creates the `traefik-public`
+network. What Terraform does **not** do: place the real `.env` on the
+instance or run `docker compose -f docker-compose.prod.yml up -d` — those
+stay manual steps (over Session Manager, not SSH), same as the original
+plan, since `.env`'s secrets shouldn't be baked into user-data (visible
+via the instance metadata service).
+
+**Requires working AWS credentials** (`aws configure` / `~/.aws/credentials`)
+with permission to create EC2/IAM/DLM resources — `terraform plan`/`apply`
+fail immediately with `InvalidClientTokenId` if the configured access key
+isn't valid.
+
 ## Conventions
 
 - Branch: `main` (not `master`).
