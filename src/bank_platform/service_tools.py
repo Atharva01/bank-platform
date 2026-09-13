@@ -10,6 +10,15 @@ from bank_platform.accounts_tools import LIST_ACCOUNTS_TOOL
 from bank_platform.authz import owner_guard
 from bank_platform.tool_utils import idempotent, tool_safe
 
+
+def _update_service_request_details(id: str, details: str) -> dict:
+    """Update a service request's details (e.g. correct a typo in a
+    change-of-address note). Approving/rejecting/completing a request is
+    staff-only and not available via chat - customers cannot self-approve
+    their own request through this tool (see service_router.py's
+    staff_update_service_request_status for the staff-only path)."""
+    return service_server.update_service_request(id, details=details)
+
 # No Phase 5 (PII Redaction) wrapping here, deliberately: nothing in this
 # domain is unambiguously personal data the way Account.owner_name is -
 # account_id/details are an identifier and operational free text, and
@@ -35,7 +44,7 @@ SERVICE_TOOLS = [
         handle_tool_error=True,
     ),
     StructuredTool.from_function(
-        func=owner_guard(tool_safe(service_server.update_service_request), resolve_account_id=_by_request_id),
+        func=owner_guard(tool_safe(_update_service_request_details), resolve_account_id=_by_request_id),
         handle_tool_error=True,
     ),
     StructuredTool.from_function(

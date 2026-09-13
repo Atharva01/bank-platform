@@ -788,3 +788,60 @@ a local test that never actually routed a single request - the honest
 status is "the pieces that don't depend on Windows' Docker socket
 quirk are verified; the Docker-provider routing itself is not, and won't
 be until the real VPS."
+
+## 25. `update_service_request` had no staff-only gate - any customer could self-approve their own request
+
+**Problem:** Found via live use: after submitting a change-of-address
+request through chat, the natural follow-up question was "who approves
+this?" - and the answer was nobody, structurally. `PATCH
+/service-requests/{id}` and the chat-facing `update_service_request` tool
+both accepted a `status` field with no check on who was setting it,
+enforcing only ownership (`authz.require_owner`) and the state machine's
+legal transitions (`service_server._ALLOWED_STATUS_TRANSITIONS`) - not
+*who* may trigger a transition. Any customer could `PATCH` their own
+`pending` `change_of_address`/`kyc_update`/`cheque_book_request` straight
+to `approved` (and from there to `completed`) themselves.
+
+**Root cause:** `service_router.py`'s customer-facing PATCH endpoint and
+`service_tools.py`'s chat tool both passed `status` straight through to
+`service_server.update_service_request` once ownership passed, on the
+(unstated, wrong) assumption that "the customer owns this request" also
+meant "the customer may change its status." Ownership and transition
+legality are necessary but not sufficient - approval is inherently a
+staff decision, not a customer one.
+
+**Solution:** Split the authorization boundary in two, at the
+router/tool layer (`service_server.py`'s state machine itself stays
+authorization-agnostic, unchanged - it's still the single source of
+truth for which *transitions* are legal, just not for *who* may trigger
+one):
+- `service_router.py`'s customer PATCH
+  (`UpdateServiceRequestRequest`) no longer has a `status` field at all -
+  a customer can only change `details`.
+- A new staff-only endpoint, `PATCH
+  /staff/service-requests/{id}/status` (gated by
+  `Depends(get_current_staff_user)`, the same dependency
+  `observability_router.py` already uses for staff-only reads), is the
+  only path that can change `status`.
+- `service_tools.py`'s chat-facing tool was replaced with
+  `_update_service_request_details` (details-only) - the LLM has no tool
+  that can change status at all, so this can't be reintroduced through
+  chat by giving the model a differently-shaped prompt later.
+
+Verified live end-to-end (not just via tests): a real customer's PATCH
+with `{"status": "approved"}` now silently no-ops on status (200, stays
+`pending`); the same customer's token against the new staff endpoint gets
+401; a real staff token against the same endpoint successfully moves
+`pending` → `approved`. New/updated REST tests in
+`test_rest_endpoints.py` cover all three cases plus the pre-existing
+409-invalid-transition case (moved onto the new staff endpoint, since
+customers can no longer reach the status field to trigger it at all).
+
+**Why it mattered:** this was a real authorization gap, not a hypothetical
+one - it shipped as part of Phase 6's customer-auth work because that
+work correctly enforced ownership and left the separate "who may
+approve" question unaddressed. Found through actual dogfooding (a user
+asking "who approves this?" after seeing their own request go straight to
+"pending" with no visible approval step), not a code review pass -
+worth remembering that live usage surfaces authorization gaps that
+ownership-only test coverage doesn't.

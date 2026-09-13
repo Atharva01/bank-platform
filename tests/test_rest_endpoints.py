@@ -167,17 +167,62 @@ def test_create_and_get_service_request(account, auth_headers):
     assert get_response.json()["status"] == "pending"
 
 
-def test_invalid_status_transition_returns_409(account, auth_headers):
+def test_invalid_status_transition_returns_409(account, auth_headers, staff_token):
     create_response = client.post(
         f"/api/accounts/{account}/service-requests", json={"request_type": "kyc_update"}, headers=auth_headers
     )
     request_id = create_response.json()["id"]
 
     response = client.patch(
-        f"/api/service-requests/{request_id}", json={"status": "completed"}, headers=auth_headers
+        f"/api/staff/service-requests/{request_id}/status",
+        json={"status": "completed"},
+        headers={"Authorization": f"Bearer {staff_token}"},
     )
     assert response.status_code == 409
     assert response.json()["error_type"] == "InvalidStatusTransitionError"
+
+
+def test_customer_cannot_set_service_request_status(account, auth_headers):
+    create_response = client.post(
+        f"/api/accounts/{account}/service-requests", json={"request_type": "kyc_update"}, headers=auth_headers
+    )
+    request_id = create_response.json()["id"]
+
+    # `status` is silently ignored by the customer-facing PATCH - the field
+    # no longer exists on UpdateServiceRequestRequest, so this only ever
+    # changes `details` (there's none here, so nothing changes).
+    response = client.patch(
+        f"/api/service-requests/{request_id}", json={"status": "approved"}, headers=auth_headers
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+
+
+def test_staff_can_approve_service_request(account, auth_headers, staff_token):
+    create_response = client.post(
+        f"/api/accounts/{account}/service-requests", json={"request_type": "kyc_update"}, headers=auth_headers
+    )
+    request_id = create_response.json()["id"]
+
+    response = client.patch(
+        f"/api/staff/service-requests/{request_id}/status",
+        json={"status": "approved"},
+        headers={"Authorization": f"Bearer {staff_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "approved"
+
+
+def test_customer_cannot_approve_via_staff_status_endpoint(account, auth_headers):
+    create_response = client.post(
+        f"/api/accounts/{account}/service-requests", json={"request_type": "kyc_update"}, headers=auth_headers
+    )
+    request_id = create_response.json()["id"]
+
+    response = client.patch(
+        f"/api/staff/service-requests/{request_id}/status", json={"status": "approved"}, headers=auth_headers
+    )
+    assert response.status_code == 401
 
 
 # Staff auth mechanics (login, token validation, unauthorized access) are
