@@ -69,6 +69,25 @@ def test_get_nonexistent_account_returns_404(auth_headers):
     assert response.json()["error_type"] == "NotFoundError"
 
 
+def test_customer_cannot_set_own_balance_via_patch(account, auth_headers):
+    # Phase 10 security review: `balance` used to be a writable field on
+    # this endpoint, letting a customer set their own account balance to
+    # anything (bypassing transactions_server.py's atomic ledger). It's
+    # silently dropped now - only owner_name is a real field.
+    response = client.patch(f"/api/accounts/{account}", json={"balance": 999999}, headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["balance"] == 100
+
+    get_response = client.get(f"/api/accounts/{account}", headers=auth_headers)
+    assert get_response.json()["balance"] == 100
+
+
+def test_customer_can_still_update_owner_name(account, auth_headers):
+    response = client.patch(f"/api/accounts/{account}", json={"owner_name": "New Name"}, headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["owner_name"] == "New Name"
+
+
 def test_create_account_with_negative_balance_returns_400(auth_headers):
     response = client.post("/api/accounts", json={"owner_name": "Bad Balance", "balance": -10}, headers=auth_headers)
     assert response.status_code == 400

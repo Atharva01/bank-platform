@@ -33,8 +33,12 @@ class CreateAccountRequest(BaseModel):
 
 
 class UpdateAccountRequest(BaseModel):
+    # No `balance` field - a customer changes their balance only via a
+    # Transaction (transactions_router.py), never directly. Letting a
+    # customer PATCH their own balance bypassed the atomic, ledger-linked
+    # balance adjustment transactions_server.py exists to enforce (found
+    # in Phase 10's security review - see PROBLEMS.md).
     owner_name: str | None = None
-    balance: float | None = None
 
 
 @router.post("", response_model=AccountResponse, status_code=201)
@@ -63,7 +67,7 @@ async def update_account(
     account_id: str, body: UpdateAccountRequest, current_customer: Customer = Depends(get_current_customer)
 ):
     authz.require_owner(account_id, current_customer.id)
-    return accounts_server.update_account(account_id, owner_name=body.owner_name, balance=body.balance)
+    return accounts_server.update_account(account_id, owner_name=body.owner_name)
 
 
 # Deliberately NOT wired into ACCOUNTS_TOOLS (accounts_tools.py) - closing

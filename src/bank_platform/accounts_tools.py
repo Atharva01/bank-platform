@@ -39,6 +39,18 @@ class _ListAccountsArgs(BaseModel):
     config-injected customer_id."""
 
 
+class _UpdateAccountArgs(BaseModel):
+    """Explicit args_schema for update_account - deliberately excludes
+    `balance` even though accounts_server.update_account still accepts it
+    as a parameter. Balance may only ever change via a Transaction
+    (transaction_agent's deposit/withdraw, atomically ledger-linked) -
+    letting a customer set it directly here bypassed that entirely (found
+    in Phase 10's security review, see PROBLEMS.md)."""
+
+    id: str
+    owner_name: str
+
+
 # Shared across all three sub-agents (accounts/transaction/service), not
 # just this domain's own tool list - found live that transaction_agent and
 # service_agent had no way to resolve "my account" and asked the customer
@@ -74,6 +86,7 @@ ACCOUNTS_TOOLS = [
             pii_guard(tool_safe(accounts_server.update_account), _ACCOUNT_FIELDS),
             resolve_account_id=lambda kwargs: kwargs.get("id"),
         ),
+        args_schema=_UpdateAccountArgs,
         handle_tool_error=True,
     ),
     LIST_ACCOUNTS_TOOL,

@@ -845,3 +845,60 @@ asking "who approves this?" after seeing their own request go straight to
 "pending" with no visible approval step), not a code review pass -
 worth remembering that live usage surfaces authorization gaps that
 ownership-only test coverage doesn't.
+
+## 26. `update_account` let a customer set their own account balance directly, bypassing the ledger entirely
+
+**Problem:** Found during Phase 10's security review (grounded in the
+official OWASP API Security Top 10 2023 - this is API3:2023, Broken
+Object Property Level Authorization), by reading `accounts_server.py`
+directly, not assumed: `PATCH /api/accounts/{id}` and the chat-facing
+`update_account` tool both accepted a `balance` field and passed it
+straight through to `accounts_server.update_account()`, which wrote it
+directly onto `Account.balance` - no link to a `Transaction` row, no
+atomicity, only a "must not be negative" check. Any authenticated
+customer could set their own account balance to any value, via a REST
+call or by simply asking the chat assistant to do it.
+
+**Root cause:** `accounts_server.update_account`'s `balance` parameter
+was never removed after `transactions_server.py` was built (Phase 1) to
+be the sole atomic, ledger-linked path for balance changes -
+`CLAUDE.md` already documented transactions as "the only server
+spanning two tables" specifically for this reason, but nothing enforced
+that at the accounts-domain boundary. Both the REST router
+(`UpdateAccountRequest`) and the chat tool (relying on LangChain's
+schema inference from the function signature, no explicit
+`args_schema`) exposed the parameter to the customer without a second
+thought, the same shape of gap as #25's `status` field on service
+requests.
+
+**Solution:** Same fix pattern as #25 - strip the dangerous field from
+every customer-facing surface, keep the domain function's parameter
+untouched for now (nothing can reach it anymore, and no staff-side
+balance-correction tooling exists yet to need it): `UpdateAccountRequest`
+(`accounts_router.py`) no longer has a `balance` field;
+`accounts_tools.py`'s `update_account` tool now has an explicit
+`_UpdateAccountArgs` schema (`id`/`owner_name` only, matching
+`_CreateAccountArgs`'s precedent) instead of relying on inferred schema.
+`ACCOUNTS_AGENT_PROMPT` (`graph.py`) now explicitly tells the model
+balance only ever changes via a deposit/withdrawal, and to explain that
+rather than attempt it directly if asked. 3 new tests
+(`test_customer_cannot_set_own_balance_via_patch`,
+`test_customer_can_still_update_owner_name` in `test_rest_endpoints.py`;
+`test_update_account_tool_schema_has_no_balance_field` in the new
+`test_accounts_tools.py`). Verified live end-to-end, not just via tests:
+a real customer's `PATCH .../accounts/{id}` with `{"balance": 1000000}`
+now silently leaves the balance at 100; the same customer asking the
+chat assistant "please set my account balance to 1000000 dollars" gets
+a plain refusal explaining deposits/withdrawals are the only path,
+confirmed the real balance was still untouched afterward.
+
+**Why it mattered:** this is about as severe as a finding gets for a
+banking app - a customer being able to mint their own balance, reachable
+from both the REST surface and, worse, simply by asking for it in plain
+English through the primary chat interface. Caught by grounding the
+review in an established framework (OWASP API Security Top 10) and
+reading the actual `accounts_server.py` implementation rather than
+trusting that "ownership is enforced" (true) meant "nothing dangerous is
+exposed" (false) - ownership and property-level authorization are
+different questions, and this codebase had good coverage of the first
+without checking the second for every field.
