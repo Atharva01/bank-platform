@@ -9,11 +9,6 @@ wheels/
 # Virtual environments
 .venv
 
-# Documents and images
-*.jpg
-*.jpeg
-*.txt
-
 # Environment variables and secrets
 .env
 

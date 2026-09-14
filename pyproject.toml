@@ -1,8 +1,9 @@
 [project]
 name = "bank-platform"
 version = "0.1.0"
-description = "Add your description here"
+description = "A multi-agent banking assistant: a LangGraph supervisor routes chat requests to specialist agents, backed by a full deterministic FastAPI/Postgres REST API."
 readme = "README.md"
+authors = [{ name = "Atharva Dharmadhikari" }]
 requires-python = ">=3.13"
 dependencies = [
     "bcrypt>=5.0.0",
@@ -21,6 +22,9 @@ dependencies = [
     "slowapi>=0.1.10",
     "sqlalchemy>=2.0.52",
 ]
+
+[project.urls]
+Repository = "https://github.com/Atharva01/bank-platform"
 
 [build-system]
 requires = ["hatchling"]

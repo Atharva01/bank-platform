@@ -1,10 +1,28 @@
 # Bank Platform
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A multi-agent banking assistant: a chat interface backed by a LangGraph
 supervisor that routes each request to a specialist agent, plus a full
 deterministic REST API alongside it.
 
 ![System architecture](assets/block-diagram.png)
+
+## Getting started
+
+```bash
+docker compose up -d      # Postgres 17
+uv sync                   # install deps + the package itself, editable
+uv run python -c "from bank_platform.models import Base; from bank_platform.database import engine; Base.metadata.create_all(engine)"
+uv run fastapi dev src/bank_platform/main.py
+```
+
+Copy `.env.example` to `.env` first and fill in an LLM provider API key
+(`GROQ_API_KEY` or similar — see `llm.py`) and a `JWT_SECRET_KEY`.
+
+```bash
+uv run pytest -v   # requires the DB container above to be running
+```
 
 ## Agents
 
@@ -14,8 +32,9 @@ the final answer back verbatim — the customer never sees that a
 multi-agent system exists underneath.
 
 - **Accounts agent** — open an account, view details/balance, update
-  owner name or balance. Cannot close an account (staff-only, not
-  agent-accessible).
+  owner name. Cannot change a balance directly (only ever via a
+  deposit/withdrawal) or close an account (staff-only) — neither is
+  agent-accessible.
 - **Transaction agent** — deposits, withdrawals, transaction history.
   Money math uses `Decimal`, never `float`.
 - **Service agent** — change-of-address, cheque book, and KYC requests.
