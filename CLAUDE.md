@@ -1,11 +1,14 @@
 # bank-platform
 
-Multi-agent banking assistant, built against a reference architecture diagram
-(`assets\ad3ccd54-9532-4b2b-b8f9-b837caf40af1_image.png`, "Step 14: Edge Layer
-Security"). Coordinator + Accounts/Transaction/Service agents, each backed by
-its own MCP server, backed by Postgres. LLM routing and everything else in
-the diagram (Edge Layer, Auth, Session Store, PII Redaction, Observability,
-Eval Suite) deferred to later phases.
+Multi-agent banking assistant, originally built against a reference
+architecture diagram
+(`assets\ad3ccd54-9532-4b2b-b8f9-b837caf40af1_image.png`, "Step 14: Edge
+Layer Security") and now implementing nearly all of it: a LangGraph
+supervisor routes `/chat` to one of three specialist agents (Accounts,
+Transaction, Service), each backed by its own MCP-style domain server on
+Postgres, plus real customer/staff auth, PII redaction, an edge layer
+(Traefik + AWS/Terraform), observability, and an on-demand agent
+evaluation suite. See "Architecture" below for the real current shape.
 
 **Always check [PROGRESS.md](PROGRESS.md) first** — it's the authoritative
 phase ledger (what's done, what's in progress, the agreed plan for current
@@ -16,12 +19,15 @@ something that's been through this before.
 ## Stack
 
 Python (>=3.13), FastAPI, SQLAlchemy 2.0, Postgres 17 via Docker, `psycopg`
-(v3, not psycopg2), `uv` for dependency management, `pytest`, `hatchling` as
-the build backend (src layout, installed editable via `uv sync`). No agent
-framework (LangGraph/CrewAI/etc.) — plain Python classes, by deliberate
-choice: not worth the indirection until an LLM-driven reasoning loop actually
-needs it. No real MCP protocol (`mcp`/FastMCP) either, by deliberate choice —
-see the MCP section below.
+(v3, not psycopg2), `uv` for dependency management, `pytest` (no mocking —
+real DB), `hatchling` as the build backend (src layout, installed editable
+via `uv sync`). LangGraph + `langgraph-supervisor` for agent orchestration,
+`langchain_openai.ChatOpenAI` (OpenAI-compatible shape) as the LLM client —
+see `llm.py`'s docstring and PROBLEMS.md for the provider evaluation trail
+(Ollama → DeepSeek → Groq → Meta Muse Spark, the current active provider).
+No real MCP protocol (`mcp`/FastMCP) — domain servers are in-process
+Python calls, not a separate service; see the Architecture section below
+for why.
 
 ## Layout
 
@@ -29,73 +35,121 @@ see the MCP section below.
 src/bank_platform/       — the package; all internal imports are
                             "from bank_platform.x import y" (absolute, never
                             relative or bare)
-  main.py                — FastAPI app, single /chat endpoint
-  coordinator.py          — rule-based routing on "<agent>.<operation>" intent
-  agents.py               — AccountsAgent / TransactionAgent / ServiceAgent:
-                             intent parsing + tool-call translation only, no
-                             DB/session code
-  interfaces.py           — MCPClient ABC + InProcessMCPClient (the real
-                             implementation in use) + default_mcp_client
-  accounts_server.py       — MCP server: owns Account + its validation
-  transactions_server.py   — MCP server: owns Transaction + Account.balance
-                              (the only server spanning two tables)
-  service_server.py        — MCP server: owns ServiceRequest + its validation
-                              and status state machine
+  main.py                    — FastAPI app: /api/chat + every REST router,
+                                 session-sweep background task, CORS,
+                                 domain-exception → HTTP status mapping
+  graph.py                   — LangGraph supervisor + 3 specialist agents
+                                 (create_agent() per domain), session/
+                                 customer binding, PII sanitize/detokenize,
+                                 observability callback wiring
+  llm.py                     — shared ChatOpenAI client (provider-swappable)
+  accounts_tools.py / transactions_tools.py / service_tools.py
+                              — LangChain StructuredTool wrappers around the
+                                domain servers below - the only files that
+                                import LangChain for their domain. Wrap
+                                tools with authz.owner_guard/inject_customer_id,
+                                pii_guard.pii_guard, tool_utils.idempotent
+  accounts_server.py         — MCP-style domain server: owns Account +
+                                 its validation
+  transactions_server.py     — owns Transaction + Account.balance (the
+                                 only server spanning two tables)
+  service_server.py          — owns ServiceRequest + its status state
+                                 machine
   crud_accounts.py / crud_transactions.py / crud_service.py
-                           — plain persistence, called only by the matching
-                             *_server.py, never by agents.py directly
-  database.py / models.py — SQLAlchemy engine/session, ORM models
-  exceptions.py            — NotFoundError / InsufficientFundsError /
-                              InvalidStatusTransitionError / ValidationError,
-                              raised by servers, caught by agents
+                              — plain persistence, called only by the
+                                matching *_server.py
+  accounts_router.py / transactions_router.py / service_router.py
+                              — REST endpoints, no LLM in the loop, real
+                                HTTP status codes (404/400/409/422)
+  auth.py / auth_router.py    — staff login (JWT, typ: staff)
+  customer_router.py          — customer self-service register/login
+                                 (JWT, typ: customer)
+  authz.py                    — ownership enforcement: require_owner (REST),
+                                 owner_guard/inject_customer_id (chat tools)
+  pii_guard.py                — reversible tokenization of Account.owner_name
+                                 before it reaches the LLM
+  session_store.py            — Postgres-backed session/customer binding
+                                 (interfaces.py's SessionStore ABC, for real)
+  observability.py / observability_router.py
+                              — AgentEventLog + staff-only usage endpoint
+  rate_limit.py                — shared slowapi Limiter (in-app rate limiting)
+  tool_utils.py                — tool_safe (domain exception → ToolException)
+                                 and idempotent (per-thread create_* dedup)
+  interfaces.py                 — SessionStore ABC (session_store.py's base)
+  database.py / models.py      — SQLAlchemy engine/session, ORM models
+  exceptions.py                 — NotFoundError / InsufficientFundsError /
+                                  InvalidStatusTransitionError /
+                                  ValidationError / SessionOwnershipError,
+                                  raised by servers, caught by
+                                  main.py's global handlers (REST) or
+                                  surfaced conversationally (chat)
 tests/                     — pytest, imports via "from bank_platform.x import y"
   (package is installed editable, so no pythonpath hack is needed)
+eval/                      — on-demand Agent Evaluation Suite (Phase 9) -
+  deliberately outside tests/, never collected by pytest/CI; makes real
+  paid LLM calls, run manually via `uv run python eval/run_eval.py`
+infra/                     — Terraform (AWS EC2 deployment target, Phase 7)
 ```
+
+`agents.py`/`coordinator.py`/`admin_auth.py` from the original Phase 0-2
+design are gone entirely — replaced by `graph.py`'s LangGraph supervisor
+(Phase 3) and real staff/customer auth (Phase 6).
 
 ## Architecture
 
 ```
-main.py (/chat)
-  → coordinator.py (routes on intent prefix)
-    → agents.py (Accounts/Transaction/Service Agent)
-      → interfaces.py: MCPClient.call_tool(tool_name, params)
-        → accounts_server.py / transactions_server.py / service_server.py
-          → crud_accounts.py / crud_transactions.py / crud_service.py
-            → database.py / models.py → Postgres
+main.py
+  → /api/chat: ChatRequest{session_id, message} → ChatResponse{reply}   [conversational, always 200,
+       → graph.py: run() → sanitize_incoming() → supervisor.invoke()      gated by customer auth]
+            → LangGraph supervisor (thread_id = session_id, PostgresSaver checkpointer)
+                 → accounts_agent / transaction_agent / service_agent (create_agent() per domain)
+                      → accounts_tools.py / transactions_tools.py / service_tools.py
+                           → owner_guard (ownership) / pii_guard (tokenize owner_name) / idempotent
+  → /api/accounts, /api/transactions, /api/service-requests,           [deterministic REST, no LLM,
+     /api/auth, /api/customers, /api/observability                      real 404/400/409/422,
+       → accounts_router.py / transactions_router.py / service_router.py  gated by customer or staff auth]
+            → authz.require_owner() → global exception handlers map exceptions.py → HTTP status
+                                     |
+                                     v  (both /chat and REST converge here)
+                      accounts_server.py / transactions_server.py / service_server.py
+                           → crud_*.py → database.py / models.py → Postgres
 ```
 
-- **MCP servers own their own data's invariants** (validation, atomicity,
-  state transitions) — not the agents, and not the `crud_*` layer. This is
-  deliberate: a real microservice validates at its own boundary rather than
-  trusting its caller, so nothing that isn't `agents.py` could ever bypass
-  these rules later. `crud_*` stays pure persistence, called only by its
-  matching `*_server.py`.
-- **Every MCP tool call is one atomic, self-contained DB transaction** — a
-  session is opened, used, committed or rolled back, and closed inside a
-  single tool call, never shared across two calls. This is what makes the
-  in-process version behave like a real network-separated MCP call would.
-- **No real MCP protocol/transport.** `InProcessMCPClient` (`interfaces.py`)
-  dispatches `call_tool(name, params)` straight to a Python function in one
-  of the three `*_server.py` modules — no subprocess, no JSON-RPC, no `mcp`
-  dependency. This was a deliberate choice after weighing it directly against
-  the real `mcp` SDK (see PROGRESS.md's change log): the SDK is async-only,
-  which would ripple through agents/coordinator/endpoint/tests, and adds
-  subprocess-management complexity (with Windows-specific risk for `stdio`)
-  for zero functional gain while the only caller is our own Coordinator in
-  the same process. The `MCPClient` interface is the seam that keeps this
-  swappable later without touching agent code, once an external caller
-  actually needs it.
-- **No LLM yet.** Coordinator routing is a plain string-split + enum lookup,
-  not an LLM call. Intentional for now, not a placeholder bug.
-- **Money uses `Decimal`, not `float`,** for all balance/amount arithmetic
-  inside the servers. `float()` conversion only happens when a server
-  serializes its result to a plain dict for the response.
-- **Error taxonomy:** `AgentResponse.error` is one of `invalid_intent`,
-  `unknown_agent`, `unknown_operation`, `not_found`, `missing_field`,
-  `insufficient_funds`, `invalid_status_transition`, `validation_error`.
-  Domain exceptions (`exceptions.py`) are raised by the servers and caught
-  per-agent in `agents.py` — never let one propagate to FastAPI's default
-  500 handler.
+- **Domain servers own their own data's invariants** (validation,
+  atomicity, state transitions) — not the agents, not the tool wrappers,
+  and not the `crud_*` layer. They're framework-agnostic (no LangChain
+  import) — only the matching `*_tools.py` file wraps them for the LLM.
+  `crud_*` stays pure persistence, called only by its matching
+  `*_server.py`.
+- **Every domain-server call is one atomic, self-contained DB
+  transaction** — a session is opened, used, committed or rolled back,
+  and closed inside a single call, never shared across two.
+- **No real MCP protocol/transport.** Domain servers are dispatched to
+  directly as Python function calls — no subprocess, no JSON-RPC, no
+  `mcp` dependency. Deliberate: the only callers are `graph.py`'s tool
+  wrappers and the REST routers, both in the same process; nothing
+  external needs a real MCP transport yet.
+- **REST bypasses the LLM entirely** — `/api/accounts` etc. call the same
+  domain-server functions `/chat`'s tools do, directly, with real HTTP
+  status codes. `/chat` is not the only way in, and REST correctness
+  never depends on the LLM behaving.
+- **Auth is enforced identically on both paths** — `authz.py`'s
+  `require_owner()` (REST, explicit `customer_id` from
+  `Depends(get_current_customer)`) and `owner_guard()`/`inject_customer_id()`
+  (chat tools, `customer_id` injected via `RunnableConfig` so the LLM
+  never sees or supplies it) share the same underlying ownership check.
+  Staff-only actions (account closure, service-request status changes)
+  are REST-only — no chat tool can reach them.
+- **Money uses `Decimal`, not `float`,** for all balance/amount
+  arithmetic inside the servers. `float()` conversion only happens when
+  a server serializes its result to a plain dict for the response.
+- **Error taxonomy:** `exceptions.py`'s domain exceptions are raised by
+  the servers. On the REST path, `main.py`'s global exception handlers
+  map them to real HTTP status codes with a machine-readable
+  `error_type`. On the chat path, `tool_utils.tool_safe` converts them to
+  `ToolException`s so the agent can react conversationally — a domain
+  exception must never propagate past either boundary uncaught (see
+  PROBLEMS.md #22 for a real regression of this rule and its fix).
 
 ## Running it
 
@@ -107,8 +161,21 @@ uv run fastapi dev src/bank_platform/main.py    # dev server
 uv run pytest -v               # requires the DB container running, no mocking
 ```
 
+Set `MUSE_API_KEY`/`GROQ_API_KEY`/`JWT_SECRET_KEY` etc. in `.env` first —
+see `.env.example` for the full list; `llm.py` reads its API key eagerly
+at import time, so the backend won't even start without it.
+
+After editing anything under `src/bank_platform/`, fully kill any running
+`python.exe` processes and cold-start `fastapi dev` rather than trusting
+`--reload` — a previously diagnosed, reconfirmed-multiple-times bug on
+this dev setup (see PROBLEMS.md).
+
 Port 5432 is also used by an unrelated project (`fastapi-postgresql-learning`)
 on this machine — check `docker ps -a` before assuming which container is up.
+
+To evaluate the live model's actual routing/tool-call behavior (not just
+run the deterministic test suite), see `eval/README.md` — on-demand only,
+costs real LLM calls.
 
 ## Deploying
 
